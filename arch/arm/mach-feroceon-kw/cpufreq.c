@@ -14,7 +14,7 @@
 #include <linux/io.h>
 #include "ctrlEnv/mvCtrlEnvLib.h"
 #include "cpu/mvCpu.h"
-
+#include <linux/module.h>
 
 enum kw_cpufreq_range {
 	KW_CPUFREQ_LOW 		= 0,
