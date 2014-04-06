@@ -1,0 +1,5958 @@
+diff -Nru openssl-0.9.8l_a/apps/apps.h openssl-0.9.8l_b/apps/apps.h
+--- openssl-0.9.8l_a/apps/apps.h	2008-11-24 18:14:13.000000000 +0200
++++ openssl-0.9.8l_b/apps/apps.h	2009-12-08 17:44:45.000000000 +0200
+@@ -112,7 +112,7 @@
+ #ifndef HEADER_APPS_H
+ #define HEADER_APPS_H
+ 
+-#include "e_os.h"
++#include <openssl/e_os.h>
+ 
+ #include <openssl/bio.h>
+ #include <openssl/x509.h>
+diff -Nru openssl-0.9.8l_a/apps/progs.h openssl-0.9.8l_b/apps/progs.h
+--- openssl-0.9.8l_a/apps/progs.h	2008-04-04 02:03:41.000000000 +0300
++++ openssl-0.9.8l_b/apps/progs.h	2009-12-08 17:44:45.000000000 +0200
+@@ -129,7 +129,9 @@
+ #ifndef OPENSSL_NO_ENGINE
+ 	{FUNC_TYPE_GENERAL,"engine",engine_main},
+ #endif
++#ifndef OPENSSL_NO_OCSP
+ 	{FUNC_TYPE_GENERAL,"ocsp",ocsp_main},
++#endif
+ 	{FUNC_TYPE_GENERAL,"prime",prime_main},
+ #ifndef OPENSSL_NO_MD2
+ 	{FUNC_TYPE_MD,"md2",dgst_main},
+diff -Nru openssl-0.9.8l_a/apps/speed.c openssl-0.9.8l_b/apps/speed.c
+--- openssl-0.9.8l_a/apps/speed.c	2009-01-07 12:48:22.000000000 +0200
++++ openssl-0.9.8l_b/apps/speed.c	2009-12-08 17:44:45.000000000 +0200
+@@ -292,7 +292,7 @@
+   "evp","sha256","sha512",
+   "aes-128 ige","aes-192 ige","aes-256 ige"};
+ static double results[ALGOR_NUM][SIZE_NUM];
+-static int lengths[SIZE_NUM]={16,64,256,1024,8*1024};
++static int lengths[SIZE_NUM]={16,64,256,1024,2*1024,4*1024};
+ static double rsa_results[RSA_NUM][2];
+ static double dsa_results[DSA_NUM][2];
+ #ifndef OPENSSL_NO_ECDSA
+@@ -328,6 +328,79 @@
+ #define START	0
+ #define STOP	1
+ 
++#ifdef __linux__
++/*
++ * record CPU usage as well
++ */
++
++static int do_cpu = 0;
++
++struct cpu_stat {
++	unsigned int	user;
++	unsigned int	nice;
++	unsigned int	system;
++	unsigned int	idle;
++	unsigned int	total;
++};
++
++static unsigned int cpu_usage[ALGOR_NUM][SIZE_NUM];
++static unsigned int rsa_cpu_usage[RSA_NUM][2];
++static unsigned int dsa_cpu_usage[DSA_NUM][2];
++static struct cpu_stat cpu_start, cpu_finish;
++
++static void
++get_cpu(int s)
++{
++	FILE *fp = NULL;
++	unsigned char	buf[80];
++	struct cpu_stat *st = s == START ? &cpu_start : &cpu_finish;
++
++	memset(st, 0, sizeof(*st));
++
++	if (fp == NULL)
++		fp = fopen("/proc/stat", "r");
++	if (!fp)
++		return;
++	if (fseek(fp, 0, SEEK_SET) == -1) {
++		fclose(fp);
++		return;
++	}
++	fscanf(fp, "%s %d %d %d %d", &buf[0], &st->user, &st->nice,
++		&st->system, &st->idle);
++	st->total = st->user + st->nice + st->system + st->idle;
++	fclose(fp);
++}
++
++static unsigned int
++calc_cpu()
++{
++	unsigned int total, res;
++
++	total  = cpu_finish.total - cpu_start.total;
++	if (total <= 0)
++		return 0;
++#if 1 // busy
++	res   = ((cpu_finish.system + cpu_finish.user + cpu_finish.nice) -
++			 (cpu_start.system + cpu_start.user + cpu_start.nice)) *
++			 100 / total;
++#endif
++#if 0 // system
++	res   = (cpu_finish.system - cpu_start.system) * 100 / total;
++#endif
++#if 0 // user
++	res   = (cpu_finish.user   - cpu_start.user)   * 100 / total;
++#endif
++#if 0 // nice
++	res   = (cpu_finish.nice   - cpu_start.nice)   * 100 / total;
++#endif
++#if 0 // idle
++	res   = (cpu_finish.idle   - cpu_start.idle)   * 100 / total;
++#endif
++	return(res);
++}
++
++#endif
++
+ #if defined(OPENSSL_SYS_NETWARE)
+ 
+    /* for NetWare the best we can do is use clock() which returns the
+@@ -358,6 +431,11 @@
+ 	{
+ 	double ret;
+ 
++#ifdef __linux__
++	if (do_cpu)
++		get_cpu(s);
++#endif
++
+ #ifdef USE_TOD
+ 	if(usertime)
+ 		{
+@@ -832,6 +910,14 @@
+ 			j--;	/* Otherwise, -elapsed gets confused with
+ 				   an algorithm. */
+ 			}
++#ifdef __linux__
++		else if	((argc > 0) && (strcmp(*argv,"-cpu") == 0))
++			{
++			do_cpu = 1;
++			j--;	/* Otherwise, -cpu gets confused with
++				   an algorithm. */
++			}
++#endif
+ 		else if	((argc > 0) && (strcmp(*argv,"-evp") == 0))
+ 			{
+ 			argc--;
+@@ -1260,6 +1346,9 @@
+ #ifdef HAVE_FORK
+ 			BIO_printf(bio_err,"-multi n        run n benchmarks in parallel.\n");
+ #endif
++#ifdef __linux__
++			BIO_printf(bio_err,"-cpu            calculate cpu utilisation.\n");
++#endif
+ 			goto end;
+ 			}
+ 		argc--;
+@@ -1267,11 +1356,6 @@
+ 		j++;
+ 		}
+ 
+-#ifdef HAVE_FORK
+-	if(multi && do_multi(multi))
+-		goto show_res;
+-#endif
+-
+ 	if (j == 0)
+ 		{
+ 		for (i=0; i<ALGOR_NUM; i++)
+@@ -1604,6 +1688,11 @@
+ 	signal(SIGALRM,sig_done);
+ #endif /* SIGALRM */
+ 
++#ifdef HAVE_FORK /* DM */
++	if(multi && do_multi(multi))
++		goto show_res;
++#endif
++
+ #ifndef OPENSSL_NO_MD2
+ 	if (doit[D_MD2])
+ 		{
+@@ -2033,8 +2122,6 @@
+ 				/* -O3 -fschedule-insns messes up an
+ 				 * optimization here!  names[D_EVP]
+ 				 * somehow becomes NULL */
+-				print_message(names[D_EVP],save_count,
+-					lengths[j]);
+ 
+ 				EVP_CIPHER_CTX_init(&ctx);
+ 				if(decrypt)
+@@ -2043,6 +2130,9 @@
+ 					EVP_EncryptInit_ex(&ctx,evp_cipher,NULL,key16,iv);
+ 				EVP_CIPHER_CTX_set_padding(&ctx, 0);
+ 
++				print_message(names[D_EVP],save_count,
++					lengths[j]);
++
+ 				Time_F(START);
+ 				if(decrypt)
+ 					for (count=0,run=1; COND(save_count*4*lengths[0]/lengths[j]); count++)
+@@ -2107,6 +2197,8 @@
+ 					}
+ 				}
+ 			d=Time_F(STOP);
++			if (do_cpu)
++				rsa_cpu_usage[j][0] = calc_cpu();
+ 			BIO_printf(bio_err,mr ? "+R1:%ld:%d:%.2f\n"
+ 				   : "%ld %d bit private RSA's in %.2fs\n",
+ 				   count,rsa_bits[j],d);
+@@ -2142,6 +2234,8 @@
+ 					}
+ 				}
+ 			d=Time_F(STOP);
++			if (do_cpu)
++				rsa_cpu_usage[j][1] = calc_cpu();
+ 			BIO_printf(bio_err,mr ? "+R2:%ld:%d:%.2f\n"
+ 				   : "%ld %d bit public RSA's in %.2fs\n",
+ 				   count,rsa_bits[j],d);
+@@ -2201,6 +2295,8 @@
+ 					}
+ 				}
+ 			d=Time_F(STOP);
++			if (do_cpu)
++				dsa_cpu_usage[j][0] = calc_cpu();
+ 			BIO_printf(bio_err,mr ? "+R3:%ld:%d:%.2f\n"
+ 				   : "%ld %d bit DSA signs in %.2fs\n",
+ 				   count,dsa_bits[j],d);
+@@ -2236,6 +2332,8 @@
+ 					}
+ 				}
+ 			d=Time_F(STOP);
++			if (do_cpu)
++				dsa_cpu_usage[j][1] = calc_cpu();
+ 			BIO_printf(bio_err,mr ? "+R4:%ld:%d:%.2f\n"
+ 				   : "%ld %d bit DSA verify in %.2fs\n",
+ 				   count,dsa_bits[j],d);
+@@ -2530,14 +2628,23 @@
+ 			fprintf(stdout,"The 'numbers' are in 1000s of bytes per second processed.\n"); 
+ 			fprintf(stdout,"type        ");
+ 			}
+-		for (j=0;  j<SIZE_NUM; j++)
++		for (j=0;  j<SIZE_NUM; j++) {
+ 			fprintf(stdout,mr ? ":%d" : "%7d bytes",lengths[j]);
++			if (do_cpu && !mr)
++				fprintf(stdout, " /cpu");
++		}
+ 		fprintf(stdout,"\n");
+ 		}
+ 
+ 	for (k=0; k<ALGOR_NUM; k++)
+ 		{
+ 		if (!doit[k]) continue;
++		if (k == D_EVP) {
++			if (evp_cipher)
++				names[D_EVP]=OBJ_nid2ln(evp_cipher->nid);
++			else
++				names[D_EVP]=OBJ_nid2ln(evp_md->type);
++		}
+ 		if(mr)
+ 			fprintf(stdout,"+F:%d:%s",k,names[k]);
+ 		else
+@@ -2548,6 +2655,8 @@
+ 				fprintf(stdout," %11.2fk",results[k][j]/1e3);
+ 			else
+ 				fprintf(stdout,mr ? ":%.2f" : " %11.2f ",results[k][j]);
++			if (do_cpu)
++				fprintf(stdout, mr ? "/%d" : "/%%%-3d", cpu_usage[k][j]);
+ 			}
+ 		fprintf(stdout,"\n");
+ 		}
+@@ -2562,13 +2671,18 @@
+ 			j=0;
+ 			}
+ 		if(mr)
+-			fprintf(stdout,"+F2:%u:%u:%f:%f\n",
+-				k,rsa_bits[k],rsa_results[k][0],
+-				rsa_results[k][1]);
+-		else
+-			fprintf(stdout,"rsa %4u bits %8.6fs %8.6fs %8.1f %8.1f\n",
+-				rsa_bits[k],rsa_results[k][0],rsa_results[k][1],
+-				1.0/rsa_results[k][0],1.0/rsa_results[k][1]);
++			fprintf(stdout,"+F2:%u:%u:%f", k,rsa_bits[k],rsa_results[k][0]);
++		else
++			fprintf(stdout,"rsa %4u bits %8.6fs",rsa_bits[k],rsa_results[k][0]);
++		if (do_cpu)
++			fprintf(stdout, mr ? "/%d": "/%%%-3d", rsa_cpu_usage[k][0]);
++		fprintf(stdout, mr ? ":%f" : " %8.6fs", rsa_results[k][1]);
++		if (do_cpu)
++			fprintf(stdout, mr ? "/%d": "/%%%-3d", rsa_cpu_usage[k][1]);
++		if(!mr)
++			fprintf(stdout, " %8.1f %8.1f",
++					1.0/rsa_results[k][0],1.0/rsa_results[k][1]);
++		fprintf(stdout, "\n");
+ 		}
+ #endif
+ #ifndef OPENSSL_NO_DSA
+@@ -2582,12 +2696,18 @@
+ 			j=0;
+ 			}
+ 		if(mr)
+-			fprintf(stdout,"+F3:%u:%u:%f:%f\n",
+-				k,dsa_bits[k],dsa_results[k][0],dsa_results[k][1]);
++			fprintf(stdout,"+F3:%u:%u:%f", k,dsa_bits[k],dsa_results[k][0]);
+ 		else
+-			fprintf(stdout,"dsa %4u bits %8.6fs %8.6fs %8.1f %8.1f\n",
+-				dsa_bits[k],dsa_results[k][0],dsa_results[k][1],
+-				1.0/dsa_results[k][0],1.0/dsa_results[k][1]);
++			fprintf(stdout,"dsa %4u bits %8.6fs",dsa_bits[k],dsa_results[k][0]);
++		if (do_cpu)
++			fprintf(stdout, mr ? "/%d": "/%%%-3d", dsa_cpu_usage[k][0]);
++		fprintf(stdout, mr ? ":%f" : " %8.6fs", dsa_results[k][1]);
++		if (do_cpu)
++			fprintf(stdout, mr ? "/%d": "/%%%-3d", dsa_cpu_usage[k][1]);
++		if(!mr)
++			fprintf(stdout, " %8.1f %8.1f",
++					1.0/dsa_results[k][0],1.0/dsa_results[k][1]);
++		fprintf(stdout, "\n");
+ 		}
+ #endif
+ #ifndef OPENSSL_NO_ECDSA
+@@ -2712,8 +2832,10 @@
+ 
+ static void print_result(int alg,int run_no,int count,double time_used)
+ 	{
+-	BIO_printf(bio_err,mr ? "+R:%d:%s:%f\n"
+-		   : "%d %s's in %.2fs\n",count,names[alg],time_used);
++	if (do_cpu)
++	    cpu_usage[alg][run_no] = calc_cpu();
++	BIO_printf(bio_err,mr ? "+R:%ld:%s:%f\n"
++		   : "%ld %s's in %.2fs\n",count,names[alg],time_used);
+ 	results[alg][run_no]=((double)count)/time_used*lengths[run_no];
+ 	}
+ 
+@@ -2808,29 +2930,11 @@
+ 				p=buf+3;
+ 				alg=atoi(sstrsep(&p,sep));
+ 				sstrsep(&p,sep);
+-				for(j=0 ; j < SIZE_NUM ; ++j)
++				for(j=0 ; j < SIZE_NUM ; ++j) {
++					if (do_cpu && strchr(p, '/'))
++						cpu_usage[alg][j] = atoi(strchr(p, '/') + 1);
+ 					results[alg][j]+=atof(sstrsep(&p,sep));
+ 				}
+-			else if(!strncmp(buf,"+F2:",4))
+-				{
+-				int k;
+-				double d;
+-				
+-				p=buf+4;
+-				k=atoi(sstrsep(&p,sep));
+-				sstrsep(&p,sep);
+-
+-				d=atof(sstrsep(&p,sep));
+-				if(n)
+-					rsa_results[k][0]=1/(1/rsa_results[k][0]+1/d);
+-				else
+-					rsa_results[k][0]=d;
+-
+-				d=atof(sstrsep(&p,sep));
+-				if(n)
+-					rsa_results[k][1]=1/(1/rsa_results[k][1]+1/d);
+-				else
+-					rsa_results[k][1]=d;
+ 				}
+ 			else if(!strncmp(buf,"+F2:",4))
+ 				{
+@@ -2841,12 +2945,18 @@
+ 				k=atoi(sstrsep(&p,sep));
+ 				sstrsep(&p,sep);
+ 
++				/* before we move the token along */
++				if (do_cpu && strchr(p, '/'))
++					rsa_cpu_usage[k][0] = atoi(strchr(p, '/') + 1);
+ 				d=atof(sstrsep(&p,sep));
+ 				if(n)
+ 					rsa_results[k][0]=1/(1/rsa_results[k][0]+1/d);
+ 				else
+ 					rsa_results[k][0]=d;
+ 
++				/* before we move the token along */
++				if (do_cpu && strchr(p, '/'))
++					rsa_cpu_usage[k][1] = atoi(strchr(p, '/') + 1);
+ 				d=atof(sstrsep(&p,sep));
+ 				if(n)
+ 					rsa_results[k][1]=1/(1/rsa_results[k][1]+1/d);
+@@ -2862,12 +2972,18 @@
+ 				k=atoi(sstrsep(&p,sep));
+ 				sstrsep(&p,sep);
+ 
++				/* before we move the token along */
++				if (do_cpu && strchr(p, '/'))
++					dsa_cpu_usage[k][0] = atoi(strchr(p, '/') + 1);
+ 				d=atof(sstrsep(&p,sep));
+ 				if(n)
+ 					dsa_results[k][0]=1/(1/dsa_results[k][0]+1/d);
+ 				else
+ 					dsa_results[k][0]=d;
+ 
++				/* before we move the token along */
++				if (do_cpu && strchr(p, '/'))
++					dsa_cpu_usage[k][1] = atoi(strchr(p, '/') + 1);
+ 				d=atof(sstrsep(&p,sep));
+ 				if(n)
+ 					dsa_results[k][1]=1/(1/dsa_results[k][1]+1/d);
+diff -Nru openssl-0.9.8l_a/apps/speed.c.orig openssl-0.9.8l_b/apps/speed.c.orig
+--- openssl-0.9.8l_a/apps/speed.c.orig	1970-01-01 02:00:00.000000000 +0200
++++ openssl-0.9.8l_b/apps/speed.c.orig	2009-01-07 12:48:22.000000000 +0200
+@@ -0,0 +1,2930 @@
++/* apps/speed.c -*- mode:C; c-file-style: "eay" -*- */
++/* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
++ * All rights reserved.
++ *
++ * This package is an SSL implementation written
++ * by Eric Young (eay@cryptsoft.com).
++ * The implementation was written so as to conform with Netscapes SSL.
++ * 
++ * This library is free for commercial and non-commercial use as long as
++ * the following conditions are aheared to.  The following conditions
++ * apply to all code found in this distribution, be it the RC4, RSA,
++ * lhash, DES, etc., code; not just the SSL code.  The SSL documentation
++ * included with this distribution is covered by the same copyright terms
++ * except that the holder is Tim Hudson (tjh@cryptsoft.com).
++ * 
++ * Copyright remains Eric Young's, and as such any Copyright notices in
++ * the code are not to be removed.
++ * If this package is used in a product, Eric Young should be given attribution
++ * as the author of the parts of the library used.
++ * This can be in the form of a textual message at program startup or
++ * in documentation (online or textual) provided with the package.
++ * 
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ * 3. All advertising materials mentioning features or use of this software
++ *    must display the following acknowledgement:
++ *    "This product includes cryptographic software written by
++ *     Eric Young (eay@cryptsoft.com)"
++ *    The word 'cryptographic' can be left out if the rouines from the library
++ *    being used are not cryptographic related :-).
++ * 4. If you include any Windows specific code (or a derivative thereof) from 
++ *    the apps directory (application code) you must include an acknowledgement:
++ *    "This product includes software written by Tim Hudson (tjh@cryptsoft.com)"
++ * 
++ * THIS SOFTWARE IS PROVIDED BY ERIC YOUNG ``AS IS'' AND
++ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
++ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
++ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
++ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
++ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
++ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
++ * SUCH DAMAGE.
++ * 
++ * The licence and distribution terms for any publically available version or
++ * derivative of this code cannot be changed.  i.e. this code cannot simply be
++ * copied and put under another distribution licence
++ * [including the GNU Public Licence.]
++ */
++/* ====================================================================
++ * Copyright 2002 Sun Microsystems, Inc. ALL RIGHTS RESERVED.
++ *
++ * Portions of the attached software ("Contribution") are developed by 
++ * SUN MICROSYSTEMS, INC., and are contributed to the OpenSSL project.
++ *
++ * The Contribution is licensed pursuant to the OpenSSL open source
++ * license provided above.
++ *
++ * The ECDH and ECDSA speed test software is originally written by 
++ * Sumit Gupta of Sun Microsystems Laboratories.
++ *
++ */
++
++/* most of this code has been pilfered from my libdes speed.c program */
++
++#ifndef OPENSSL_NO_SPEED
++
++#undef SECONDS
++#define SECONDS		3	
++#define RSA_SECONDS	10
++#define DSA_SECONDS	10
++#define ECDSA_SECONDS   10
++#define ECDH_SECONDS    10
++
++/* 11-Sep-92 Andrew Daviel   Support for Silicon Graphics IRIX added */
++/* 06-Apr-92 Luke Brennan    Support for VMS and add extra signal calls */
++
++#undef PROG
++#define PROG speed_main
++
++#include <stdio.h>
++#include <stdlib.h>
++
++#include <string.h>
++#include <math.h>
++#include "apps.h"
++#ifdef OPENSSL_NO_STDIO
++#define APPS_WIN16
++#endif
++#include <openssl/crypto.h>
++#include <openssl/rand.h>
++#include <openssl/err.h>
++#include <openssl/evp.h>
++#include <openssl/objects.h>
++#if !defined(OPENSSL_SYS_MSDOS)
++#include OPENSSL_UNISTD
++#endif
++
++#ifndef OPENSSL_SYS_NETWARE
++#include <signal.h>
++#endif
++
++#if defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(OPENSSL_SYS_MACOSX)
++# define USE_TOD
++#elif !defined(OPENSSL_SYS_MSDOS) && !defined(OPENSSL_SYS_VXWORKS) && (!defined(OPENSSL_SYS_VMS) || defined(__DECC))
++# define TIMES
++#endif
++#if !defined(_UNICOS) && !defined(__OpenBSD__) && !defined(sgi) && !defined(__FreeBSD__) && !(defined(__bsdi) || defined(__bsdi__)) && !defined(_AIX) && !defined(OPENSSL_SYS_MPE) && !defined(__NetBSD__) && !defined(OPENSSL_SYS_VXWORKS) /* FIXME */
++# define TIMEB
++#endif
++
++#if defined(OPENSSL_SYS_NETWARE)
++#undef TIMES
++#undef TIMEB
++#include <time.h>
++#endif
++
++#ifndef _IRIX
++# include <time.h>
++#endif
++#ifdef TIMES
++# include <sys/types.h>
++# include <sys/times.h>
++#endif
++#ifdef USE_TOD
++# include <sys/time.h>
++# include <sys/resource.h>
++#endif
++
++/* Depending on the VMS version, the tms structure is perhaps defined.
++   The __TMS macro will show if it was.  If it wasn't defined, we should
++   undefine TIMES, since that tells the rest of the program how things
++   should be handled.				-- Richard Levitte */
++#if defined(OPENSSL_SYS_VMS_DECC) && !defined(__TMS)
++#undef TIMES
++#endif
++
++#ifdef TIMEB
++#include <sys/timeb.h>
++#endif
++
++#if !defined(TIMES) && !defined(TIMEB) && !defined(USE_TOD) && !defined(OPENSSL_SYS_VXWORKS) && !defined(OPENSSL_SYS_NETWARE)
++#error "It seems neither struct tms nor struct timeb is supported in this platform!"
++#endif
++
++#if defined(sun) || defined(__ultrix)
++#define _POSIX_SOURCE
++#include <limits.h>
++#include <sys/param.h>
++#endif
++
++#include <openssl/bn.h>
++#ifndef OPENSSL_NO_DES
++#include <openssl/des.h>
++#endif
++#ifndef OPENSSL_NO_AES
++#include <openssl/aes.h>
++#endif
++#ifndef OPENSSL_NO_CAMELLIA
++#include <openssl/camellia.h>
++#endif
++#ifndef OPENSSL_NO_MD2
++#include <openssl/md2.h>
++#endif
++#ifndef OPENSSL_NO_MDC2
++#include <openssl/mdc2.h>
++#endif
++#ifndef OPENSSL_NO_MD4
++#include <openssl/md4.h>
++#endif
++#ifndef OPENSSL_NO_MD5
++#include <openssl/md5.h>
++#endif
++#ifndef OPENSSL_NO_HMAC
++#include <openssl/hmac.h>
++#endif
++#include <openssl/evp.h>
++#ifndef OPENSSL_NO_SHA
++#include <openssl/sha.h>
++#endif
++#ifndef OPENSSL_NO_RIPEMD
++#include <openssl/ripemd.h>
++#endif
++#ifndef OPENSSL_NO_RC4
++#include <openssl/rc4.h>
++#endif
++#ifndef OPENSSL_NO_RC5
++#include <openssl/rc5.h>
++#endif
++#ifndef OPENSSL_NO_RC2
++#include <openssl/rc2.h>
++#endif
++#ifndef OPENSSL_NO_IDEA
++#include <openssl/idea.h>
++#endif
++#ifndef OPENSSL_NO_SEED
++#include <openssl/seed.h>
++#endif
++#ifndef OPENSSL_NO_BF
++#include <openssl/blowfish.h>
++#endif
++#ifndef OPENSSL_NO_CAST
++#include <openssl/cast.h>
++#endif
++#ifndef OPENSSL_NO_RSA
++#include <openssl/rsa.h>
++#include "./testrsa.h"
++#endif
++#include <openssl/x509.h>
++#ifndef OPENSSL_NO_DSA
++#include <openssl/dsa.h>
++#include "./testdsa.h"
++#endif
++#ifndef OPENSSL_NO_ECDSA
++#include <openssl/ecdsa.h>
++#endif
++#ifndef OPENSSL_NO_ECDH
++#include <openssl/ecdh.h>
++#endif
++
++/*
++ * The following "HZ" timing stuff should be sync'd up with the code in
++ * crypto/tmdiff.[ch]. That appears to try to do the same job, though I think
++ * this code is more up to date than libcrypto's so there may be features to
++ * migrate over first. This is used in two places further down AFAICS. 
++ * The point is that nothing in openssl actually *uses* that tmdiff stuff, so
++ * either speed.c should be using it or it should go because it's obviously not
++ * useful enough. Anyone want to do a janitorial job on this?
++ */
++
++/* The following if from times(3) man page.  It may need to be changed */
++#ifndef HZ
++# if defined(_SC_CLK_TCK) \
++     && (!defined(OPENSSL_SYS_VMS) || __CTRL_VER >= 70000000)
++#  define HZ sysconf(_SC_CLK_TCK)
++# else
++#  ifndef CLK_TCK
++#   ifndef _BSD_CLK_TCK_ /* FreeBSD hack */
++#    define HZ	100.0
++#   else /* _BSD_CLK_TCK_ */
++#    define HZ ((double)_BSD_CLK_TCK_)
++#   endif
++#  else /* CLK_TCK */
++#   define HZ ((double)CLK_TCK)
++#  endif
++# endif
++#endif
++
++#if !defined(OPENSSL_SYS_VMS) && !defined(OPENSSL_SYS_WINDOWS) && !defined(OPENSSL_SYS_MACINTOSH_CLASSIC) && !defined(OPENSSL_SYS_OS2) && !defined(OPENSSL_SYS_NETWARE)
++# define HAVE_FORK 1
++#endif
++
++#undef BUFSIZE
++#define BUFSIZE	((long)1024*8+1)
++int run=0;
++
++static char ftime_used = 0, times_used = 0, gettimeofday_used = 0, getrusage_used = 0;
++static int mr=0;
++static int usertime=1;
++
++static double Time_F(int s);
++static void print_message(const char *s,long num,int length);
++static void pkey_print_message(const char *str, const char *str2,
++	long num, int bits, int sec);
++static void print_result(int alg,int run_no,int count,double time_used);
++#ifdef HAVE_FORK
++static int do_multi(int multi);
++#endif
++
++#define ALGOR_NUM	28
++#define SIZE_NUM	5
++#define RSA_NUM		4
++#define DSA_NUM		3
++
++#define EC_NUM       16
++#define MAX_ECDH_SIZE 256
++
++static const char *names[ALGOR_NUM]={
++  "md2","mdc2","md4","md5","hmac(md5)","sha1","rmd160","rc4",
++  "des cbc","des ede3","idea cbc","seed cbc",
++  "rc2 cbc","rc5-32/12 cbc","blowfish cbc","cast cbc",
++  "aes-128 cbc","aes-192 cbc","aes-256 cbc",
++  "camellia-128 cbc","camellia-192 cbc","camellia-256 cbc",
++  "evp","sha256","sha512",
++  "aes-128 ige","aes-192 ige","aes-256 ige"};
++static double results[ALGOR_NUM][SIZE_NUM];
++static int lengths[SIZE_NUM]={16,64,256,1024,8*1024};
++static double rsa_results[RSA_NUM][2];
++static double dsa_results[DSA_NUM][2];
++#ifndef OPENSSL_NO_ECDSA
++static double ecdsa_results[EC_NUM][2];
++#endif
++#ifndef OPENSSL_NO_ECDH
++static double ecdh_results[EC_NUM][1];
++#endif
++
++#if defined(OPENSSL_NO_DSA) && !(defined(OPENSSL_NO_ECDSA) && defined(OPENSSL_NO_ECDH))
++static const char rnd_seed[] = "string to make the random number generator think it has entropy";
++static int rnd_fake = 0;
++#endif
++
++#ifdef SIGALRM
++#if defined(__STDC__) || defined(sgi) || defined(_AIX)
++#define SIGRETTYPE void
++#else
++#define SIGRETTYPE int
++#endif 
++
++static SIGRETTYPE sig_done(int sig);
++static SIGRETTYPE sig_done(int sig)
++	{
++	signal(SIGALRM,sig_done);
++	run=0;
++#ifdef LINT
++	sig=sig;
++#endif
++	}
++#endif
++
++#define START	0
++#define STOP	1
++
++#if defined(OPENSSL_SYS_NETWARE)
++
++   /* for NetWare the best we can do is use clock() which returns the
++    * time, in hundredths of a second, since the NLM began executing
++   */
++static double Time_F(int s)
++	{
++	double ret;
++
++   static clock_t tstart,tend;
++
++   if (s == START)
++   {
++      tstart=clock();
++      return(0);
++   }
++   else
++   {
++      tend=clock();
++      ret=(double)((double)(tend)-(double)(tstart));
++      return((ret < 0.001)?0.001:ret);
++   }
++   }
++
++#else
++
++static double Time_F(int s)
++	{
++	double ret;
++
++#ifdef USE_TOD
++	if(usertime)
++		{
++		static struct rusage tstart,tend;
++
++		getrusage_used = 1;
++		if (s == START)
++			{
++			getrusage(RUSAGE_SELF,&tstart);
++			return(0);
++			}
++		else
++			{
++			long i;
++
++			getrusage(RUSAGE_SELF,&tend);
++			i=(long)tend.ru_utime.tv_usec-(long)tstart.ru_utime.tv_usec;
++			ret=((double)(tend.ru_utime.tv_sec-tstart.ru_utime.tv_sec))
++			  +((double)i)/1000000.0;
++			return((ret < 0.001)?0.001:ret);
++			}
++		}
++	else
++		{
++		static struct timeval tstart,tend;
++		long i;
++
++		gettimeofday_used = 1;
++		if (s == START)
++			{
++			gettimeofday(&tstart,NULL);
++			return(0);
++			}
++		else
++			{
++			gettimeofday(&tend,NULL);
++			i=(long)tend.tv_usec-(long)tstart.tv_usec;
++			ret=((double)(tend.tv_sec-tstart.tv_sec))+((double)i)/1000000.0;
++			return((ret < 0.001)?0.001:ret);
++			}
++		}
++#else  /* ndef USE_TOD */
++		
++# ifdef TIMES
++	if (usertime)
++		{
++		static struct tms tstart,tend;
++
++		times_used = 1;
++		if (s == START)
++			{
++			times(&tstart);
++			return(0);
++			}
++		else
++			{
++			times(&tend);
++			ret = HZ;
++			ret=(double)(tend.tms_utime-tstart.tms_utime) / ret;
++			return((ret < 1e-3)?1e-3:ret);
++			}
++		}
++# endif /* times() */
++# if defined(TIMES) && defined(TIMEB)
++	else
++# endif
++# ifdef OPENSSL_SYS_VXWORKS
++                {
++		static unsigned long tick_start, tick_end;
++
++		if( s == START )
++			{
++			tick_start = tickGet();
++			return 0;
++			}
++		else
++			{
++			tick_end = tickGet();
++			ret = (double)(tick_end - tick_start) / (double)sysClkRateGet();
++			return((ret < 0.001)?0.001:ret);
++			}
++                }
++# elif defined(TIMEB)
++		{
++		static struct timeb tstart,tend;
++		long i;
++
++		ftime_used = 1;
++		if (s == START)
++			{
++			ftime(&tstart);
++			return(0);
++			}
++		else
++			{
++			ftime(&tend);
++			i=(long)tend.millitm-(long)tstart.millitm;
++			ret=((double)(tend.time-tstart.time))+((double)i)/1000.0;
++			return((ret < 0.001)?0.001:ret);
++			}
++		}
++# endif
++#endif
++	}
++#endif /* if defined(OPENSSL_SYS_NETWARE) */
++
++
++#ifndef OPENSSL_NO_ECDH
++static const int KDF1_SHA1_len = 20;
++static void *KDF1_SHA1(const void *in, size_t inlen, void *out, size_t *outlen)
++	{
++#ifndef OPENSSL_NO_SHA
++	if (*outlen < SHA_DIGEST_LENGTH)
++		return NULL;
++	else
++		*outlen = SHA_DIGEST_LENGTH;
++	return SHA1(in, inlen, out);
++#else
++	return NULL;
++#endif	/* OPENSSL_NO_SHA */
++	}
++#endif	/* OPENSSL_NO_ECDH */
++
++
++int MAIN(int, char **);
++
++int MAIN(int argc, char **argv)
++	{
++#ifndef OPENSSL_NO_ENGINE
++	ENGINE *e = NULL;
++#endif
++	unsigned char *buf=NULL,*buf2=NULL;
++	int mret=1;
++	long count=0,save_count=0;
++	int i,j,k;
++#if !defined(OPENSSL_NO_RSA) || !defined(OPENSSL_NO_DSA)
++	long rsa_count;
++#endif
++#ifndef OPENSSL_NO_RSA
++	unsigned rsa_num;
++#endif
++	unsigned char md[EVP_MAX_MD_SIZE];
++#ifndef OPENSSL_NO_MD2
++	unsigned char md2[MD2_DIGEST_LENGTH];
++#endif
++#ifndef OPENSSL_NO_MDC2
++	unsigned char mdc2[MDC2_DIGEST_LENGTH];
++#endif
++#ifndef OPENSSL_NO_MD4
++	unsigned char md4[MD4_DIGEST_LENGTH];
++#endif
++#ifndef OPENSSL_NO_MD5
++	unsigned char md5[MD5_DIGEST_LENGTH];
++	unsigned char hmac[MD5_DIGEST_LENGTH];
++#endif
++#ifndef OPENSSL_NO_SHA
++	unsigned char sha[SHA_DIGEST_LENGTH];
++#ifndef OPENSSL_NO_SHA256
++	unsigned char sha256[SHA256_DIGEST_LENGTH];
++#endif
++#ifndef OPENSSL_NO_SHA512
++	unsigned char sha512[SHA512_DIGEST_LENGTH];
++#endif
++#endif
++#ifndef OPENSSL_NO_RIPEMD
++	unsigned char rmd160[RIPEMD160_DIGEST_LENGTH];
++#endif
++#ifndef OPENSSL_NO_RC4
++	RC4_KEY rc4_ks;
++#endif
++#ifndef OPENSSL_NO_RC5
++	RC5_32_KEY rc5_ks;
++#endif
++#ifndef OPENSSL_NO_RC2
++	RC2_KEY rc2_ks;
++#endif
++#ifndef OPENSSL_NO_IDEA
++	IDEA_KEY_SCHEDULE idea_ks;
++#endif
++#ifndef OPENSSL_NO_SEED
++	SEED_KEY_SCHEDULE seed_ks;
++#endif
++#ifndef OPENSSL_NO_BF
++	BF_KEY bf_ks;
++#endif
++#ifndef OPENSSL_NO_CAST
++	CAST_KEY cast_ks;
++#endif
++	static const unsigned char key16[16]=
++		{0x12,0x34,0x56,0x78,0x9a,0xbc,0xde,0xf0,
++		 0x34,0x56,0x78,0x9a,0xbc,0xde,0xf0,0x12};
++#ifndef OPENSSL_NO_AES
++	static const unsigned char key24[24]=
++		{0x12,0x34,0x56,0x78,0x9a,0xbc,0xde,0xf0,
++		 0x34,0x56,0x78,0x9a,0xbc,0xde,0xf0,0x12,
++		 0x56,0x78,0x9a,0xbc,0xde,0xf0,0x12,0x34};
++	static const unsigned char key32[32]=
++		{0x12,0x34,0x56,0x78,0x9a,0xbc,0xde,0xf0,
++		 0x34,0x56,0x78,0x9a,0xbc,0xde,0xf0,0x12,
++		 0x56,0x78,0x9a,0xbc,0xde,0xf0,0x12,0x34,
++		 0x78,0x9a,0xbc,0xde,0xf0,0x12,0x34,0x56};
++#endif
++#ifndef OPENSSL_NO_CAMELLIA
++	static const unsigned char ckey24[24]=
++		{0x12,0x34,0x56,0x78,0x9a,0xbc,0xde,0xf0,
++		 0x34,0x56,0x78,0x9a,0xbc,0xde,0xf0,0x12,
++		 0x56,0x78,0x9a,0xbc,0xde,0xf0,0x12,0x34};
++	static const unsigned char ckey32[32]=
++		{0x12,0x34,0x56,0x78,0x9a,0xbc,0xde,0xf0,
++		 0x34,0x56,0x78,0x9a,0xbc,0xde,0xf0,0x12,
++		 0x56,0x78,0x9a,0xbc,0xde,0xf0,0x12,0x34,
++		 0x78,0x9a,0xbc,0xde,0xf0,0x12,0x34,0x56};
++#endif
++#ifndef OPENSSL_NO_AES
++#define MAX_BLOCK_SIZE 128
++#else
++#define MAX_BLOCK_SIZE 64
++#endif
++	unsigned char DES_iv[8];
++	unsigned char iv[2*MAX_BLOCK_SIZE/8];
++#ifndef OPENSSL_NO_DES
++	DES_cblock *buf_as_des_cblock = NULL;
++	static DES_cblock key ={0x12,0x34,0x56,0x78,0x9a,0xbc,0xde,0xf0};
++	static DES_cblock key2={0x34,0x56,0x78,0x9a,0xbc,0xde,0xf0,0x12};
++	static DES_cblock key3={0x56,0x78,0x9a,0xbc,0xde,0xf0,0x12,0x34};
++	DES_key_schedule sch;
++	DES_key_schedule sch2;
++	DES_key_schedule sch3;
++#endif
++#ifndef OPENSSL_NO_AES
++	AES_KEY aes_ks1, aes_ks2, aes_ks3;
++#endif
++#ifndef OPENSSL_NO_CAMELLIA
++	CAMELLIA_KEY camellia_ks1, camellia_ks2, camellia_ks3;
++#endif
++#define	D_MD2		0
++#define	D_MDC2		1
++#define	D_MD4		2
++#define	D_MD5		3
++#define	D_HMAC		4
++#define	D_SHA1		5
++#define D_RMD160	6
++#define	D_RC4		7
++#define	D_CBC_DES	8
++#define	D_EDE3_DES	9
++#define	D_CBC_IDEA	10
++#define	D_CBC_SEED	11
++#define	D_CBC_RC2	12
++#define	D_CBC_RC5	13
++#define	D_CBC_BF	14
++#define	D_CBC_CAST	15
++#define D_CBC_128_AES	16
++#define D_CBC_192_AES	17
++#define D_CBC_256_AES	18
++#define D_CBC_128_CML   19 
++#define D_CBC_192_CML   20
++#define D_CBC_256_CML   21 
++#define D_EVP		22
++#define D_SHA256	23	
++#define D_SHA512	24
++#define D_IGE_128_AES   25
++#define D_IGE_192_AES   26
++#define D_IGE_256_AES   27
++	double d=0.0;
++	long c[ALGOR_NUM][SIZE_NUM];
++#define	R_DSA_512	0
++#define	R_DSA_1024	1
++#define	R_DSA_2048	2
++#define	R_RSA_512	0
++#define	R_RSA_1024	1
++#define	R_RSA_2048	2
++#define	R_RSA_4096	3
++
++#define R_EC_P160    0
++#define R_EC_P192    1	
++#define R_EC_P224    2
++#define R_EC_P256    3
++#define R_EC_P384    4
++#define R_EC_P521    5
++#define R_EC_K163    6
++#define R_EC_K233    7
++#define R_EC_K283    8
++#define R_EC_K409    9
++#define R_EC_K571    10
++#define R_EC_B163    11
++#define R_EC_B233    12
++#define R_EC_B283    13
++#define R_EC_B409    14
++#define R_EC_B571    15
++
++#ifndef OPENSSL_NO_RSA
++	RSA *rsa_key[RSA_NUM];
++	long rsa_c[RSA_NUM][2];
++	static unsigned int rsa_bits[RSA_NUM]={512,1024,2048,4096};
++	static unsigned char *rsa_data[RSA_NUM]=
++		{test512,test1024,test2048,test4096};
++	static int rsa_data_length[RSA_NUM]={
++		sizeof(test512),sizeof(test1024),
++		sizeof(test2048),sizeof(test4096)};
++#endif
++#ifndef OPENSSL_NO_DSA
++	DSA *dsa_key[DSA_NUM];
++	long dsa_c[DSA_NUM][2];
++	static unsigned int dsa_bits[DSA_NUM]={512,1024,2048};
++#endif
++#ifndef OPENSSL_NO_EC
++	/* We only test over the following curves as they are representative, 
++	 * To add tests over more curves, simply add the curve NID
++	 * and curve name to the following arrays and increase the 
++	 * EC_NUM value accordingly. 
++	 */
++	static unsigned int test_curves[EC_NUM] = 
++	{	
++	/* Prime Curves */
++	NID_secp160r1,
++	NID_X9_62_prime192v1,
++	NID_secp224r1,
++	NID_X9_62_prime256v1,
++	NID_secp384r1,
++	NID_secp521r1,
++	/* Binary Curves */
++	NID_sect163k1,
++	NID_sect233k1,
++	NID_sect283k1,
++	NID_sect409k1,
++	NID_sect571k1,
++	NID_sect163r2,
++	NID_sect233r1,
++	NID_sect283r1,
++	NID_sect409r1,
++	NID_sect571r1
++	}; 
++	static const char * test_curves_names[EC_NUM] = 
++	{
++	/* Prime Curves */
++	"secp160r1",
++	"nistp192",
++	"nistp224",
++	"nistp256",
++	"nistp384",
++	"nistp521",
++	/* Binary Curves */
++	"nistk163",
++	"nistk233",
++	"nistk283",
++	"nistk409",
++	"nistk571",
++	"nistb163",
++	"nistb233",
++	"nistb283",
++	"nistb409",
++	"nistb571"
++	};
++	static int test_curves_bits[EC_NUM] =
++        {
++        160, 192, 224, 256, 384, 521,
++        163, 233, 283, 409, 571,
++        163, 233, 283, 409, 571
++        };
++
++#endif
++
++#ifndef OPENSSL_NO_ECDSA
++	unsigned char ecdsasig[256];
++	unsigned int ecdsasiglen;
++	EC_KEY *ecdsa[EC_NUM];
++	long ecdsa_c[EC_NUM][2];
++#endif
++
++#ifndef OPENSSL_NO_ECDH
++	EC_KEY *ecdh_a[EC_NUM], *ecdh_b[EC_NUM];
++	unsigned char secret_a[MAX_ECDH_SIZE], secret_b[MAX_ECDH_SIZE];
++	int secret_size_a, secret_size_b;
++	int ecdh_checks = 0;
++	int secret_idx = 0;
++	long ecdh_c[EC_NUM][2];
++#endif
++
++	int rsa_doit[RSA_NUM];
++	int dsa_doit[DSA_NUM];
++#ifndef OPENSSL_NO_ECDSA
++	int ecdsa_doit[EC_NUM];
++#endif
++#ifndef OPENSSL_NO_ECDH
++        int ecdh_doit[EC_NUM];
++#endif
++	int doit[ALGOR_NUM];
++	int pr_header=0;
++	const EVP_CIPHER *evp_cipher=NULL;
++	const EVP_MD *evp_md=NULL;
++	int decrypt=0;
++#ifdef HAVE_FORK
++	int multi=0;
++#endif
++
++#ifndef TIMES
++	usertime=-1;
++#endif
++
++	apps_startup();
++	memset(results, 0, sizeof(results));
++#ifndef OPENSSL_NO_DSA
++	memset(dsa_key,0,sizeof(dsa_key));
++#endif
++#ifndef OPENSSL_NO_ECDSA
++	for (i=0; i<EC_NUM; i++) ecdsa[i] = NULL;
++#endif
++#ifndef OPENSSL_NO_ECDH
++	for (i=0; i<EC_NUM; i++)
++		{
++		ecdh_a[i] = NULL;
++		ecdh_b[i] = NULL;
++		}
++#endif
++
++
++	if (bio_err == NULL)
++		if ((bio_err=BIO_new(BIO_s_file())) != NULL)
++			BIO_set_fp(bio_err,stderr,BIO_NOCLOSE|BIO_FP_TEXT);
++
++	if (!load_config(bio_err, NULL))
++		goto end;
++
++#ifndef OPENSSL_NO_RSA
++	memset(rsa_key,0,sizeof(rsa_key));
++	for (i=0; i<RSA_NUM; i++)
++		rsa_key[i]=NULL;
++#endif
++
++	if ((buf=(unsigned char *)OPENSSL_malloc((int)BUFSIZE)) == NULL)
++		{
++		BIO_printf(bio_err,"out of memory\n");
++		goto end;
++		}
++#ifndef OPENSSL_NO_DES
++	buf_as_des_cblock = (DES_cblock *)buf;
++#endif
++	if ((buf2=(unsigned char *)OPENSSL_malloc((int)BUFSIZE)) == NULL)
++		{
++		BIO_printf(bio_err,"out of memory\n");
++		goto end;
++		}
++
++	memset(c,0,sizeof(c));
++	memset(DES_iv,0,sizeof(DES_iv));
++	memset(iv,0,sizeof(iv));
++
++	for (i=0; i<ALGOR_NUM; i++)
++		doit[i]=0;
++	for (i=0; i<RSA_NUM; i++)
++		rsa_doit[i]=0;
++	for (i=0; i<DSA_NUM; i++)
++		dsa_doit[i]=0;
++#ifndef OPENSSL_NO_ECDSA
++	for (i=0; i<EC_NUM; i++)
++		ecdsa_doit[i]=0;
++#endif
++#ifndef OPENSSL_NO_ECDH
++	for (i=0; i<EC_NUM; i++)
++		ecdh_doit[i]=0;
++#endif
++
++	
++	j=0;
++	argc--;
++	argv++;
++	while (argc)
++		{
++		if	((argc > 0) && (strcmp(*argv,"-elapsed") == 0))
++			{
++			usertime = 0;
++			j--;	/* Otherwise, -elapsed gets confused with
++				   an algorithm. */
++			}
++		else if	((argc > 0) && (strcmp(*argv,"-evp") == 0))
++			{
++			argc--;
++			argv++;
++			if(argc == 0)
++				{
++				BIO_printf(bio_err,"no EVP given\n");
++				goto end;
++				}
++			evp_cipher=EVP_get_cipherbyname(*argv);
++			if(!evp_cipher)
++				{
++				evp_md=EVP_get_digestbyname(*argv);
++				}
++			if(!evp_cipher && !evp_md)
++				{
++				BIO_printf(bio_err,"%s is an unknown cipher or digest\n",*argv);
++				goto end;
++				}
++			doit[D_EVP]=1;
++			}
++		else if (argc > 0 && !strcmp(*argv,"-decrypt"))
++			{
++			decrypt=1;
++			j--;	/* Otherwise, -elapsed gets confused with
++				   an algorithm. */
++			}
++#ifndef OPENSSL_NO_ENGINE
++		else if	((argc > 0) && (strcmp(*argv,"-engine") == 0))
++			{
++			argc--;
++			argv++;
++			if(argc == 0)
++				{
++				BIO_printf(bio_err,"no engine given\n");
++				goto end;
++				}
++                        e = setup_engine(bio_err, *argv, 0);
++			/* j will be increased again further down.  We just
++			   don't want speed to confuse an engine with an
++			   algorithm, especially when none is given (which
++			   means all of them should be run) */
++			j--;
++			}
++#endif
++#ifdef HAVE_FORK
++		else if	((argc > 0) && (strcmp(*argv,"-multi") == 0))
++			{
++			argc--;
++			argv++;
++			if(argc == 0)
++				{
++				BIO_printf(bio_err,"no multi count given\n");
++				goto end;
++				}
++			multi=atoi(argv[0]);
++			if(multi <= 0)
++			    {
++				BIO_printf(bio_err,"bad multi count\n");
++				goto end;
++				}				
++			j--;	/* Otherwise, -mr gets confused with
++				   an algorithm. */
++			}
++#endif
++		else if (argc > 0 && !strcmp(*argv,"-mr"))
++			{
++			mr=1;
++			j--;	/* Otherwise, -mr gets confused with
++				   an algorithm. */
++			}
++		else
++#ifndef OPENSSL_NO_MD2
++		if	(strcmp(*argv,"md2") == 0) doit[D_MD2]=1;
++		else
++#endif
++#ifndef OPENSSL_NO_MDC2
++			if (strcmp(*argv,"mdc2") == 0) doit[D_MDC2]=1;
++		else
++#endif
++#ifndef OPENSSL_NO_MD4
++			if (strcmp(*argv,"md4") == 0) doit[D_MD4]=1;
++		else
++#endif
++#ifndef OPENSSL_NO_MD5
++			if (strcmp(*argv,"md5") == 0) doit[D_MD5]=1;
++		else
++#endif
++#ifndef OPENSSL_NO_MD5
++			if (strcmp(*argv,"hmac") == 0) doit[D_HMAC]=1;
++		else
++#endif
++#ifndef OPENSSL_NO_SHA
++			if (strcmp(*argv,"sha1") == 0) doit[D_SHA1]=1;
++		else
++			if (strcmp(*argv,"sha") == 0)	doit[D_SHA1]=1,
++							doit[D_SHA256]=1,
++							doit[D_SHA512]=1;
++		else
++#ifndef OPENSSL_NO_SHA256
++			if (strcmp(*argv,"sha256") == 0) doit[D_SHA256]=1;
++		else
++#endif
++#ifndef OPENSSL_NO_SHA512
++			if (strcmp(*argv,"sha512") == 0) doit[D_SHA512]=1;
++		else
++#endif
++#endif
++#ifndef OPENSSL_NO_RIPEMD
++			if (strcmp(*argv,"ripemd") == 0) doit[D_RMD160]=1;
++		else
++			if (strcmp(*argv,"rmd160") == 0) doit[D_RMD160]=1;
++		else
++			if (strcmp(*argv,"ripemd160") == 0) doit[D_RMD160]=1;
++		else
++#endif
++#ifndef OPENSSL_NO_RC4
++			if (strcmp(*argv,"rc4") == 0) doit[D_RC4]=1;
++		else 
++#endif
++#ifndef OPENSSL_NO_DES
++			if (strcmp(*argv,"des-cbc") == 0) doit[D_CBC_DES]=1;
++		else	if (strcmp(*argv,"des-ede3") == 0) doit[D_EDE3_DES]=1;
++		else
++#endif
++#ifndef OPENSSL_NO_AES
++			if (strcmp(*argv,"aes-128-cbc") == 0) doit[D_CBC_128_AES]=1;
++		else	if (strcmp(*argv,"aes-192-cbc") == 0) doit[D_CBC_192_AES]=1;
++		else	if (strcmp(*argv,"aes-256-cbc") == 0) doit[D_CBC_256_AES]=1;
++		else    if (strcmp(*argv,"aes-128-ige") == 0) doit[D_IGE_128_AES]=1;
++		else	if (strcmp(*argv,"aes-192-ige") == 0) doit[D_IGE_192_AES]=1;
++		else	if (strcmp(*argv,"aes-256-ige") == 0) doit[D_IGE_256_AES]=1;
++                else
++#endif
++#ifndef OPENSSL_NO_CAMELLIA
++			if (strcmp(*argv,"camellia-128-cbc") == 0) doit[D_CBC_128_CML]=1;
++		else    if (strcmp(*argv,"camellia-192-cbc") == 0) doit[D_CBC_192_CML]=1;
++		else    if (strcmp(*argv,"camellia-256-cbc") == 0) doit[D_CBC_256_CML]=1;
++		else
++#endif
++#ifndef OPENSSL_NO_RSA
++#if 0 /* was: #ifdef RSAref */
++			if (strcmp(*argv,"rsaref") == 0) 
++			{
++			RSA_set_default_openssl_method(RSA_PKCS1_RSAref());
++			j--;
++			}
++		else
++#endif
++#ifndef RSA_NULL
++			if (strcmp(*argv,"openssl") == 0) 
++			{
++			RSA_set_default_method(RSA_PKCS1_SSLeay());
++			j--;
++			}
++		else
++#endif
++#endif /* !OPENSSL_NO_RSA */
++		     if (strcmp(*argv,"dsa512") == 0) dsa_doit[R_DSA_512]=2;
++		else if (strcmp(*argv,"dsa1024") == 0) dsa_doit[R_DSA_1024]=2;
++		else if (strcmp(*argv,"dsa2048") == 0) dsa_doit[R_DSA_2048]=2;
++		else if (strcmp(*argv,"rsa512") == 0) rsa_doit[R_RSA_512]=2;
++		else if (strcmp(*argv,"rsa1024") == 0) rsa_doit[R_RSA_1024]=2;
++		else if (strcmp(*argv,"rsa2048") == 0) rsa_doit[R_RSA_2048]=2;
++		else if (strcmp(*argv,"rsa4096") == 0) rsa_doit[R_RSA_4096]=2;
++		else
++#ifndef OPENSSL_NO_RC2
++		     if (strcmp(*argv,"rc2-cbc") == 0) doit[D_CBC_RC2]=1;
++		else if (strcmp(*argv,"rc2") == 0) doit[D_CBC_RC2]=1;
++		else
++#endif
++#ifndef OPENSSL_NO_RC5
++		     if (strcmp(*argv,"rc5-cbc") == 0) doit[D_CBC_RC5]=1;
++		else if (strcmp(*argv,"rc5") == 0) doit[D_CBC_RC5]=1;
++		else
++#endif
++#ifndef OPENSSL_NO_IDEA
++		     if (strcmp(*argv,"idea-cbc") == 0) doit[D_CBC_IDEA]=1;
++		else if (strcmp(*argv,"idea") == 0) doit[D_CBC_IDEA]=1;
++		else
++#endif
++#ifndef OPENSSL_NO_SEED
++		     if (strcmp(*argv,"seed-cbc") == 0) doit[D_CBC_SEED]=1;
++		else if (strcmp(*argv,"seed") == 0) doit[D_CBC_SEED]=1;
++		else
++#endif
++#ifndef OPENSSL_NO_BF
++		     if (strcmp(*argv,"bf-cbc") == 0) doit[D_CBC_BF]=1;
++		else if (strcmp(*argv,"blowfish") == 0) doit[D_CBC_BF]=1;
++		else if (strcmp(*argv,"bf") == 0) doit[D_CBC_BF]=1;
++		else
++#endif
++#ifndef OPENSSL_NO_CAST
++		     if (strcmp(*argv,"cast-cbc") == 0) doit[D_CBC_CAST]=1;
++		else if (strcmp(*argv,"cast") == 0) doit[D_CBC_CAST]=1;
++		else if (strcmp(*argv,"cast5") == 0) doit[D_CBC_CAST]=1;
++		else
++#endif
++#ifndef OPENSSL_NO_DES
++			if (strcmp(*argv,"des") == 0)
++			{
++			doit[D_CBC_DES]=1;
++			doit[D_EDE3_DES]=1;
++			}
++		else
++#endif
++#ifndef OPENSSL_NO_AES
++			if (strcmp(*argv,"aes") == 0)
++			{
++			doit[D_CBC_128_AES]=1;
++			doit[D_CBC_192_AES]=1;
++			doit[D_CBC_256_AES]=1;
++			}
++		else
++#endif
++#ifndef OPENSSL_NO_CAMELLIA
++			if (strcmp(*argv,"camellia") == 0)
++			{
++			doit[D_CBC_128_CML]=1;
++			doit[D_CBC_192_CML]=1;
++			doit[D_CBC_256_CML]=1;
++			}
++		else
++#endif
++#ifndef OPENSSL_NO_RSA
++			if (strcmp(*argv,"rsa") == 0)
++			{
++			rsa_doit[R_RSA_512]=1;
++			rsa_doit[R_RSA_1024]=1;
++			rsa_doit[R_RSA_2048]=1;
++			rsa_doit[R_RSA_4096]=1;
++			}
++		else
++#endif
++#ifndef OPENSSL_NO_DSA
++			if (strcmp(*argv,"dsa") == 0)
++			{
++			dsa_doit[R_DSA_512]=1;
++			dsa_doit[R_DSA_1024]=1;
++			dsa_doit[R_DSA_2048]=1;
++			}
++		else
++#endif
++#ifndef OPENSSL_NO_ECDSA
++		     if (strcmp(*argv,"ecdsap160") == 0) ecdsa_doit[R_EC_P160]=2;
++		else if (strcmp(*argv,"ecdsap192") == 0) ecdsa_doit[R_EC_P192]=2;
++		else if (strcmp(*argv,"ecdsap224") == 0) ecdsa_doit[R_EC_P224]=2;
++		else if (strcmp(*argv,"ecdsap256") == 0) ecdsa_doit[R_EC_P256]=2;
++		else if (strcmp(*argv,"ecdsap384") == 0) ecdsa_doit[R_EC_P384]=2;
++		else if (strcmp(*argv,"ecdsap521") == 0) ecdsa_doit[R_EC_P521]=2;
++		else if (strcmp(*argv,"ecdsak163") == 0) ecdsa_doit[R_EC_K163]=2;
++		else if (strcmp(*argv,"ecdsak233") == 0) ecdsa_doit[R_EC_K233]=2;
++		else if (strcmp(*argv,"ecdsak283") == 0) ecdsa_doit[R_EC_K283]=2;
++		else if (strcmp(*argv,"ecdsak409") == 0) ecdsa_doit[R_EC_K409]=2;
++		else if (strcmp(*argv,"ecdsak571") == 0) ecdsa_doit[R_EC_K571]=2;
++		else if (strcmp(*argv,"ecdsab163") == 0) ecdsa_doit[R_EC_B163]=2;
++		else if (strcmp(*argv,"ecdsab233") == 0) ecdsa_doit[R_EC_B233]=2;
++		else if (strcmp(*argv,"ecdsab283") == 0) ecdsa_doit[R_EC_B283]=2;
++		else if (strcmp(*argv,"ecdsab409") == 0) ecdsa_doit[R_EC_B409]=2;
++		else if (strcmp(*argv,"ecdsab571") == 0) ecdsa_doit[R_EC_B571]=2;
++		else if (strcmp(*argv,"ecdsa") == 0)
++			{
++			for (i=0; i < EC_NUM; i++)
++				ecdsa_doit[i]=1;
++			}
++		else
++#endif
++#ifndef OPENSSL_NO_ECDH
++		     if (strcmp(*argv,"ecdhp160") == 0) ecdh_doit[R_EC_P160]=2;
++		else if (strcmp(*argv,"ecdhp192") == 0) ecdh_doit[R_EC_P192]=2;
++		else if (strcmp(*argv,"ecdhp224") == 0) ecdh_doit[R_EC_P224]=2;
++		else if (strcmp(*argv,"ecdhp256") == 0) ecdh_doit[R_EC_P256]=2;
++		else if (strcmp(*argv,"ecdhp384") == 0) ecdh_doit[R_EC_P384]=2;
++		else if (strcmp(*argv,"ecdhp521") == 0) ecdh_doit[R_EC_P521]=2;
++		else if (strcmp(*argv,"ecdhk163") == 0) ecdh_doit[R_EC_K163]=2;
++		else if (strcmp(*argv,"ecdhk233") == 0) ecdh_doit[R_EC_K233]=2;
++		else if (strcmp(*argv,"ecdhk283") == 0) ecdh_doit[R_EC_K283]=2;
++		else if (strcmp(*argv,"ecdhk409") == 0) ecdh_doit[R_EC_K409]=2;
++		else if (strcmp(*argv,"ecdhk571") == 0) ecdh_doit[R_EC_K571]=2;
++		else if (strcmp(*argv,"ecdhb163") == 0) ecdh_doit[R_EC_B163]=2;
++		else if (strcmp(*argv,"ecdhb233") == 0) ecdh_doit[R_EC_B233]=2;
++		else if (strcmp(*argv,"ecdhb283") == 0) ecdh_doit[R_EC_B283]=2;
++		else if (strcmp(*argv,"ecdhb409") == 0) ecdh_doit[R_EC_B409]=2;
++		else if (strcmp(*argv,"ecdhb571") == 0) ecdh_doit[R_EC_B571]=2;
++		else if (strcmp(*argv,"ecdh") == 0)
++			{
++			for (i=0; i < EC_NUM; i++)
++				ecdh_doit[i]=1;
++			}
++		else
++#endif
++			{
++			BIO_printf(bio_err,"Error: bad option or value\n");
++			BIO_printf(bio_err,"\n");
++			BIO_printf(bio_err,"Available values:\n");
++#ifndef OPENSSL_NO_MD2
++			BIO_printf(bio_err,"md2      ");
++#endif
++#ifndef OPENSSL_NO_MDC2
++			BIO_printf(bio_err,"mdc2     ");
++#endif
++#ifndef OPENSSL_NO_MD4
++			BIO_printf(bio_err,"md4      ");
++#endif
++#ifndef OPENSSL_NO_MD5
++			BIO_printf(bio_err,"md5      ");
++#ifndef OPENSSL_NO_HMAC
++			BIO_printf(bio_err,"hmac     ");
++#endif
++#endif
++#ifndef OPENSSL_NO_SHA1
++			BIO_printf(bio_err,"sha1     ");
++#endif
++#ifndef OPENSSL_NO_SHA256
++			BIO_printf(bio_err,"sha256   ");
++#endif
++#ifndef OPENSSL_NO_SHA512
++			BIO_printf(bio_err,"sha512   ");
++#endif
++#ifndef OPENSSL_NO_RIPEMD160
++			BIO_printf(bio_err,"rmd160");
++#endif
++#if !defined(OPENSSL_NO_MD2) || !defined(OPENSSL_NO_MDC2) || \
++    !defined(OPENSSL_NO_MD4) || !defined(OPENSSL_NO_MD5) || \
++    !defined(OPENSSL_NO_SHA1) || !defined(OPENSSL_NO_RIPEMD160)
++			BIO_printf(bio_err,"\n");
++#endif
++
++#ifndef OPENSSL_NO_IDEA
++			BIO_printf(bio_err,"idea-cbc ");
++#endif
++#ifndef OPENSSL_NO_SEED
++			BIO_printf(bio_err,"seed-cbc ");
++#endif
++#ifndef OPENSSL_NO_RC2
++			BIO_printf(bio_err,"rc2-cbc  ");
++#endif
++#ifndef OPENSSL_NO_RC5
++			BIO_printf(bio_err,"rc5-cbc  ");
++#endif
++#ifndef OPENSSL_NO_BF
++			BIO_printf(bio_err,"bf-cbc");
++#endif
++#if !defined(OPENSSL_NO_IDEA) || !defined(OPENSSL_NO_SEED) || !defined(OPENSSL_NO_RC2) || \
++    !defined(OPENSSL_NO_BF) || !defined(OPENSSL_NO_RC5)
++			BIO_printf(bio_err,"\n");
++#endif
++#ifndef OPENSSL_NO_DES
++			BIO_printf(bio_err,"des-cbc  des-ede3 ");
++#endif
++#ifndef OPENSSL_NO_AES
++			BIO_printf(bio_err,"aes-128-cbc aes-192-cbc aes-256-cbc ");
++			BIO_printf(bio_err,"aes-128-ige aes-192-ige aes-256-ige ");
++#endif
++#ifndef OPENSSL_NO_CAMELLIA
++			BIO_printf(bio_err,"\n");
++			BIO_printf(bio_err,"camellia-128-cbc camellia-192-cbc camellia-256-cbc ");
++#endif
++#ifndef OPENSSL_NO_RC4
++			BIO_printf(bio_err,"rc4");
++#endif
++			BIO_printf(bio_err,"\n");
++
++#ifndef OPENSSL_NO_RSA
++			BIO_printf(bio_err,"rsa512   rsa1024  rsa2048  rsa4096\n");
++#endif
++
++#ifndef OPENSSL_NO_DSA
++			BIO_printf(bio_err,"dsa512   dsa1024  dsa2048\n");
++#endif
++#ifndef OPENSSL_NO_ECDSA
++			BIO_printf(bio_err,"ecdsap160 ecdsap192 ecdsap224 ecdsap256 ecdsap384 ecdsap521\n");
++			BIO_printf(bio_err,"ecdsak163 ecdsak233 ecdsak283 ecdsak409 ecdsak571\n");
++			BIO_printf(bio_err,"ecdsab163 ecdsab233 ecdsab283 ecdsab409 ecdsab571\n");
++			BIO_printf(bio_err,"ecdsa\n");
++#endif
++#ifndef OPENSSL_NO_ECDH
++			BIO_printf(bio_err,"ecdhp160  ecdhp192  ecdhp224  ecdhp256  ecdhp384  ecdhp521\n");
++			BIO_printf(bio_err,"ecdhk163  ecdhk233  ecdhk283  ecdhk409  ecdhk571\n");
++			BIO_printf(bio_err,"ecdhb163  ecdhb233  ecdhb283  ecdhb409  ecdhb571\n");
++			BIO_printf(bio_err,"ecdh\n");
++#endif
++
++#ifndef OPENSSL_NO_IDEA
++			BIO_printf(bio_err,"idea     ");
++#endif
++#ifndef OPENSSL_NO_SEED
++			BIO_printf(bio_err,"seed     ");
++#endif
++#ifndef OPENSSL_NO_RC2
++			BIO_printf(bio_err,"rc2      ");
++#endif
++#ifndef OPENSSL_NO_DES
++			BIO_printf(bio_err,"des      ");
++#endif
++#ifndef OPENSSL_NO_AES
++			BIO_printf(bio_err,"aes      ");
++#endif
++#ifndef OPENSSL_NO_CAMELLIA
++			BIO_printf(bio_err,"camellia ");
++#endif
++#ifndef OPENSSL_NO_RSA
++			BIO_printf(bio_err,"rsa      ");
++#endif
++#ifndef OPENSSL_NO_BF
++			BIO_printf(bio_err,"blowfish");
++#endif
++#if !defined(OPENSSL_NO_IDEA) || !defined(OPENSSL_NO_SEED) || \
++    !defined(OPENSSL_NO_RC2) || !defined(OPENSSL_NO_DES) || \
++    !defined(OPENSSL_NO_RSA) || !defined(OPENSSL_NO_BF) || \
++    !defined(OPENSSL_NO_AES) || !defined(OPENSSL_NO_CAMELLIA)
++			BIO_printf(bio_err,"\n");
++#endif
++
++			BIO_printf(bio_err,"\n");
++			BIO_printf(bio_err,"Available options:\n");
++#if defined(TIMES) || defined(USE_TOD)
++			BIO_printf(bio_err,"-elapsed        measure time in real time instead of CPU user time.\n");
++#endif
++#ifndef OPENSSL_NO_ENGINE
++			BIO_printf(bio_err,"-engine e       use engine e, possibly a hardware device.\n");
++#endif
++			BIO_printf(bio_err,"-evp e          use EVP e.\n");
++			BIO_printf(bio_err,"-decrypt        time decryption instead of encryption (only EVP).\n");
++			BIO_printf(bio_err,"-mr             produce machine readable output.\n");
++#ifdef HAVE_FORK
++			BIO_printf(bio_err,"-multi n        run n benchmarks in parallel.\n");
++#endif
++			goto end;
++			}
++		argc--;
++		argv++;
++		j++;
++		}
++
++#ifdef HAVE_FORK
++	if(multi && do_multi(multi))
++		goto show_res;
++#endif
++
++	if (j == 0)
++		{
++		for (i=0; i<ALGOR_NUM; i++)
++			{
++			if (i != D_EVP)
++				doit[i]=1;
++			}
++		for (i=0; i<RSA_NUM; i++)
++			rsa_doit[i]=1;
++		for (i=0; i<DSA_NUM; i++)
++			dsa_doit[i]=1;
++		}
++	for (i=0; i<ALGOR_NUM; i++)
++		if (doit[i]) pr_header++;
++
++	if (usertime == 0 && !mr)
++		BIO_printf(bio_err,"You have chosen to measure elapsed time instead of user CPU time.\n");
++	if (usertime <= 0 && !mr)
++		{
++		BIO_printf(bio_err,"To get the most accurate results, try to run this\n");
++		BIO_printf(bio_err,"program when this computer is idle.\n");
++		}
++
++#ifndef OPENSSL_NO_RSA
++	for (i=0; i<RSA_NUM; i++)
++		{
++		const unsigned char *p;
++
++		p=rsa_data[i];
++		rsa_key[i]=d2i_RSAPrivateKey(NULL,&p,rsa_data_length[i]);
++		if (rsa_key[i] == NULL)
++			{
++			BIO_printf(bio_err,"internal error loading RSA key number %d\n",i);
++			goto end;
++			}
++#if 0
++		else
++			{
++			BIO_printf(bio_err,mr ? "+RK:%d:"
++				   : "Loaded RSA key, %d bit modulus and e= 0x",
++				   BN_num_bits(rsa_key[i]->n));
++			BN_print(bio_err,rsa_key[i]->e);
++			BIO_printf(bio_err,"\n");
++			}
++#endif
++		}
++#endif
++
++#ifndef OPENSSL_NO_DSA
++	dsa_key[0]=get_dsa512();
++	dsa_key[1]=get_dsa1024();
++	dsa_key[2]=get_dsa2048();
++#endif
++
++#ifndef OPENSSL_NO_DES
++	DES_set_key_unchecked(&key,&sch);
++	DES_set_key_unchecked(&key2,&sch2);
++	DES_set_key_unchecked(&key3,&sch3);
++#endif
++#ifndef OPENSSL_NO_AES
++	AES_set_encrypt_key(key16,128,&aes_ks1);
++	AES_set_encrypt_key(key24,192,&aes_ks2);
++	AES_set_encrypt_key(key32,256,&aes_ks3);
++#endif
++#ifndef OPENSSL_NO_CAMELLIA
++	Camellia_set_key(key16,128,&camellia_ks1);
++	Camellia_set_key(ckey24,192,&camellia_ks2);
++	Camellia_set_key(ckey32,256,&camellia_ks3);
++#endif
++#ifndef OPENSSL_NO_IDEA
++	idea_set_encrypt_key(key16,&idea_ks);
++#endif
++#ifndef OPENSSL_NO_SEED
++	SEED_set_key(key16,&seed_ks);
++#endif
++#ifndef OPENSSL_NO_RC4
++	RC4_set_key(&rc4_ks,16,key16);
++#endif
++#ifndef OPENSSL_NO_RC2
++	RC2_set_key(&rc2_ks,16,key16,128);
++#endif
++#ifndef OPENSSL_NO_RC5
++	RC5_32_set_key(&rc5_ks,16,key16,12);
++#endif
++#ifndef OPENSSL_NO_BF
++	BF_set_key(&bf_ks,16,key16);
++#endif
++#ifndef OPENSSL_NO_CAST
++	CAST_set_key(&cast_ks,16,key16);
++#endif
++#ifndef OPENSSL_NO_RSA
++	memset(rsa_c,0,sizeof(rsa_c));
++#endif
++#ifndef SIGALRM
++#ifndef OPENSSL_NO_DES
++	BIO_printf(bio_err,"First we calculate the approximate speed ...\n");
++	count=10;
++	do	{
++		long it;
++		count*=2;
++		Time_F(START);
++		for (it=count; it; it--)
++			DES_ecb_encrypt(buf_as_des_cblock,buf_as_des_cblock,
++				&sch,DES_ENCRYPT);
++		d=Time_F(STOP);
++		} while (d <3);
++	save_count=count;
++	c[D_MD2][0]=count/10;
++	c[D_MDC2][0]=count/10;
++	c[D_MD4][0]=count;
++	c[D_MD5][0]=count;
++	c[D_HMAC][0]=count;
++	c[D_SHA1][0]=count;
++	c[D_RMD160][0]=count;
++	c[D_RC4][0]=count*5;
++	c[D_CBC_DES][0]=count;
++	c[D_EDE3_DES][0]=count/3;
++	c[D_CBC_IDEA][0]=count;
++	c[D_CBC_SEED][0]=count;
++	c[D_CBC_RC2][0]=count;
++	c[D_CBC_RC5][0]=count;
++	c[D_CBC_BF][0]=count;
++	c[D_CBC_CAST][0]=count;
++	c[D_CBC_128_AES][0]=count;
++	c[D_CBC_192_AES][0]=count;
++	c[D_CBC_256_AES][0]=count;
++	c[D_CBC_128_CML][0]=count;
++	c[D_CBC_192_CML][0]=count;
++	c[D_CBC_256_CML][0]=count;
++	c[D_SHA256][0]=count;
++	c[D_SHA512][0]=count;
++	c[D_IGE_128_AES][0]=count;
++	c[D_IGE_192_AES][0]=count;
++	c[D_IGE_256_AES][0]=count;
++
++	for (i=1; i<SIZE_NUM; i++)
++		{
++		c[D_MD2][i]=c[D_MD2][0]*4*lengths[0]/lengths[i];
++		c[D_MDC2][i]=c[D_MDC2][0]*4*lengths[0]/lengths[i];
++		c[D_MD4][i]=c[D_MD4][0]*4*lengths[0]/lengths[i];
++		c[D_MD5][i]=c[D_MD5][0]*4*lengths[0]/lengths[i];
++		c[D_HMAC][i]=c[D_HMAC][0]*4*lengths[0]/lengths[i];
++		c[D_SHA1][i]=c[D_SHA1][0]*4*lengths[0]/lengths[i];
++		c[D_RMD160][i]=c[D_RMD160][0]*4*lengths[0]/lengths[i];
++		c[D_SHA256][i]=c[D_SHA256][0]*4*lengths[0]/lengths[i];
++		c[D_SHA512][i]=c[D_SHA512][0]*4*lengths[0]/lengths[i];
++		}
++	for (i=1; i<SIZE_NUM; i++)
++		{
++		long l0,l1;
++
++		l0=(long)lengths[i-1];
++		l1=(long)lengths[i];
++		c[D_RC4][i]=c[D_RC4][i-1]*l0/l1;
++		c[D_CBC_DES][i]=c[D_CBC_DES][i-1]*l0/l1;
++		c[D_EDE3_DES][i]=c[D_EDE3_DES][i-1]*l0/l1;
++		c[D_CBC_IDEA][i]=c[D_CBC_IDEA][i-1]*l0/l1;
++		c[D_CBC_SEED][i]=c[D_CBC_SEED][i-1]*l0/l1;
++		c[D_CBC_RC2][i]=c[D_CBC_RC2][i-1]*l0/l1;
++		c[D_CBC_RC5][i]=c[D_CBC_RC5][i-1]*l0/l1;
++		c[D_CBC_BF][i]=c[D_CBC_BF][i-1]*l0/l1;
++		c[D_CBC_CAST][i]=c[D_CBC_CAST][i-1]*l0/l1;
++		c[D_CBC_128_AES][i]=c[D_CBC_128_AES][i-1]*l0/l1;
++		c[D_CBC_192_AES][i]=c[D_CBC_192_AES][i-1]*l0/l1;
++		c[D_CBC_256_AES][i]=c[D_CBC_256_AES][i-1]*l0/l1;
++ 		c[D_CBC_128_CML][i]=c[D_CBC_128_CML][i-1]*l0/l1;
++		c[D_CBC_192_CML][i]=c[D_CBC_192_CML][i-1]*l0/l1;
++		c[D_CBC_256_CML][i]=c[D_CBC_256_CML][i-1]*l0/l1;
++		c[D_IGE_128_AES][i]=c[D_IGE_128_AES][i-1]*l0/l1;
++		c[D_IGE_192_AES][i]=c[D_IGE_192_AES][i-1]*l0/l1;
++		c[D_IGE_256_AES][i]=c[D_IGE_256_AES][i-1]*l0/l1;
++		}
++#ifndef OPENSSL_NO_RSA
++	rsa_c[R_RSA_512][0]=count/2000;
++	rsa_c[R_RSA_512][1]=count/400;
++	for (i=1; i<RSA_NUM; i++)
++		{
++		rsa_c[i][0]=rsa_c[i-1][0]/8;
++		rsa_c[i][1]=rsa_c[i-1][1]/4;
++		if ((rsa_doit[i] <= 1) && (rsa_c[i][0] == 0))
++			rsa_doit[i]=0;
++		else
++			{
++			if (rsa_c[i][0] == 0)
++				{
++				rsa_c[i][0]=1;
++				rsa_c[i][1]=20;
++				}
++			}				
++		}
++#endif
++
++#ifndef OPENSSL_NO_DSA
++	dsa_c[R_DSA_512][0]=count/1000;
++	dsa_c[R_DSA_512][1]=count/1000/2;
++	for (i=1; i<DSA_NUM; i++)
++		{
++		dsa_c[i][0]=dsa_c[i-1][0]/4;
++		dsa_c[i][1]=dsa_c[i-1][1]/4;
++		if ((dsa_doit[i] <= 1) && (dsa_c[i][0] == 0))
++			dsa_doit[i]=0;
++		else
++			{
++			if (dsa_c[i] == 0)
++				{
++				dsa_c[i][0]=1;
++				dsa_c[i][1]=1;
++				}
++			}				
++		}
++#endif
++
++#ifndef OPENSSL_NO_ECDSA
++	ecdsa_c[R_EC_P160][0]=count/1000;
++	ecdsa_c[R_EC_P160][1]=count/1000/2;
++	for (i=R_EC_P192; i<=R_EC_P521; i++)
++		{
++		ecdsa_c[i][0]=ecdsa_c[i-1][0]/2;
++		ecdsa_c[i][1]=ecdsa_c[i-1][1]/2;
++		if ((ecdsa_doit[i] <= 1) && (ecdsa_c[i][0] == 0))
++			ecdsa_doit[i]=0;
++		else
++			{
++			if (ecdsa_c[i] == 0)
++				{
++				ecdsa_c[i][0]=1;
++				ecdsa_c[i][1]=1;
++				}
++			}
++		}
++	ecdsa_c[R_EC_K163][0]=count/1000;
++	ecdsa_c[R_EC_K163][1]=count/1000/2;
++	for (i=R_EC_K233; i<=R_EC_K571; i++)
++		{
++		ecdsa_c[i][0]=ecdsa_c[i-1][0]/2;
++		ecdsa_c[i][1]=ecdsa_c[i-1][1]/2;
++		if ((ecdsa_doit[i] <= 1) && (ecdsa_c[i][0] == 0))
++			ecdsa_doit[i]=0;
++		else
++			{
++			if (ecdsa_c[i] == 0)
++				{
++				ecdsa_c[i][0]=1;
++				ecdsa_c[i][1]=1;
++				}
++			}
++		}
++	ecdsa_c[R_EC_B163][0]=count/1000;
++	ecdsa_c[R_EC_B163][1]=count/1000/2;
++	for (i=R_EC_B233; i<=R_EC_B571; i++)
++		{
++		ecdsa_c[i][0]=ecdsa_c[i-1][0]/2;
++		ecdsa_c[i][1]=ecdsa_c[i-1][1]/2;
++		if ((ecdsa_doit[i] <= 1) && (ecdsa_c[i][0] == 0))
++			ecdsa_doit[i]=0;
++		else
++			{
++			if (ecdsa_c[i] == 0)
++				{
++				ecdsa_c[i][0]=1;
++				ecdsa_c[i][1]=1;
++				}
++			}
++		}
++#endif
++
++#ifndef OPENSSL_NO_ECDH
++	ecdh_c[R_EC_P160][0]=count/1000;
++	ecdh_c[R_EC_P160][1]=count/1000;
++	for (i=R_EC_P192; i<=R_EC_P521; i++)
++		{
++		ecdh_c[i][0]=ecdh_c[i-1][0]/2;
++		ecdh_c[i][1]=ecdh_c[i-1][1]/2;
++		if ((ecdh_doit[i] <= 1) && (ecdh_c[i][0] == 0))
++			ecdh_doit[i]=0;
++		else
++			{
++			if (ecdh_c[i] == 0)
++				{
++				ecdh_c[i][0]=1;
++				ecdh_c[i][1]=1;
++				}
++			}
++		}
++	ecdh_c[R_EC_K163][0]=count/1000;
++	ecdh_c[R_EC_K163][1]=count/1000;
++	for (i=R_EC_K233; i<=R_EC_K571; i++)
++		{
++		ecdh_c[i][0]=ecdh_c[i-1][0]/2;
++		ecdh_c[i][1]=ecdh_c[i-1][1]/2;
++		if ((ecdh_doit[i] <= 1) && (ecdh_c[i][0] == 0))
++			ecdh_doit[i]=0;
++		else
++			{
++			if (ecdh_c[i] == 0)
++				{
++				ecdh_c[i][0]=1;
++				ecdh_c[i][1]=1;
++				}
++			}
++		}
++	ecdh_c[R_EC_B163][0]=count/1000;
++	ecdh_c[R_EC_B163][1]=count/1000;
++	for (i=R_EC_B233; i<=R_EC_B571; i++)
++		{
++		ecdh_c[i][0]=ecdh_c[i-1][0]/2;
++		ecdh_c[i][1]=ecdh_c[i-1][1]/2;
++		if ((ecdh_doit[i] <= 1) && (ecdh_c[i][0] == 0))
++			ecdh_doit[i]=0;
++		else
++			{
++			if (ecdh_c[i] == 0)
++				{
++				ecdh_c[i][0]=1;
++				ecdh_c[i][1]=1;
++				}
++			}
++		}
++#endif
++
++#define COND(d)	(count < (d))
++#define COUNT(d) (d)
++#else
++/* not worth fixing */
++# error "You cannot disable DES on systems without SIGALRM."
++#endif /* OPENSSL_NO_DES */
++#else
++#define COND(c)	(run)
++#define COUNT(d) (count)
++	signal(SIGALRM,sig_done);
++#endif /* SIGALRM */
++
++#ifndef OPENSSL_NO_MD2
++	if (doit[D_MD2])
++		{
++		for (j=0; j<SIZE_NUM; j++)
++			{
++			print_message(names[D_MD2],c[D_MD2][j],lengths[j]);
++			Time_F(START);
++			for (count=0,run=1; COND(c[D_MD2][j]); count++)
++				EVP_Digest(buf,(unsigned long)lengths[j],&(md2[0]),NULL,EVP_md2(),NULL);
++			d=Time_F(STOP);
++			print_result(D_MD2,j,count,d);
++			}
++		}
++#endif
++#ifndef OPENSSL_NO_MDC2
++	if (doit[D_MDC2])
++		{
++		for (j=0; j<SIZE_NUM; j++)
++			{
++			print_message(names[D_MDC2],c[D_MDC2][j],lengths[j]);
++			Time_F(START);
++			for (count=0,run=1; COND(c[D_MDC2][j]); count++)
++				EVP_Digest(buf,(unsigned long)lengths[j],&(mdc2[0]),NULL,EVP_mdc2(),NULL);
++			d=Time_F(STOP);
++			print_result(D_MDC2,j,count,d);
++			}
++		}
++#endif
++
++#ifndef OPENSSL_NO_MD4
++	if (doit[D_MD4])
++		{
++		for (j=0; j<SIZE_NUM; j++)
++			{
++			print_message(names[D_MD4],c[D_MD4][j],lengths[j]);
++			Time_F(START);
++			for (count=0,run=1; COND(c[D_MD4][j]); count++)
++				EVP_Digest(&(buf[0]),(unsigned long)lengths[j],&(md4[0]),NULL,EVP_md4(),NULL);
++			d=Time_F(STOP);
++			print_result(D_MD4,j,count,d);
++			}
++		}
++#endif
++
++#ifndef OPENSSL_NO_MD5
++	if (doit[D_MD5])
++		{
++		for (j=0; j<SIZE_NUM; j++)
++			{
++			print_message(names[D_MD5],c[D_MD5][j],lengths[j]);
++			Time_F(START);
++			for (count=0,run=1; COND(c[D_MD5][j]); count++)
++				EVP_Digest(&(buf[0]),(unsigned long)lengths[j],&(md5[0]),NULL,EVP_get_digestbyname("md5"),NULL);
++			d=Time_F(STOP);
++			print_result(D_MD5,j,count,d);
++			}
++		}
++#endif
++
++#if !defined(OPENSSL_NO_MD5) && !defined(OPENSSL_NO_HMAC)
++	if (doit[D_HMAC])
++		{
++		HMAC_CTX hctx;
++
++		HMAC_CTX_init(&hctx);
++		HMAC_Init_ex(&hctx,(unsigned char *)"This is a key...",
++			16,EVP_md5(), NULL);
++
++		for (j=0; j<SIZE_NUM; j++)
++			{
++			print_message(names[D_HMAC],c[D_HMAC][j],lengths[j]);
++			Time_F(START);
++			for (count=0,run=1; COND(c[D_HMAC][j]); count++)
++				{
++				HMAC_Init_ex(&hctx,NULL,0,NULL,NULL);
++				HMAC_Update(&hctx,buf,lengths[j]);
++				HMAC_Final(&hctx,&(hmac[0]),NULL);
++				}
++			d=Time_F(STOP);
++			print_result(D_HMAC,j,count,d);
++			}
++		HMAC_CTX_cleanup(&hctx);
++		}
++#endif
++#ifndef OPENSSL_NO_SHA
++	if (doit[D_SHA1])
++		{
++		for (j=0; j<SIZE_NUM; j++)
++			{
++			print_message(names[D_SHA1],c[D_SHA1][j],lengths[j]);
++			Time_F(START);
++			for (count=0,run=1; COND(c[D_SHA1][j]); count++)
++				EVP_Digest(buf,(unsigned long)lengths[j],&(sha[0]),NULL,EVP_sha1(),NULL);
++			d=Time_F(STOP);
++			print_result(D_SHA1,j,count,d);
++			}
++		}
++
++#ifndef OPENSSL_NO_SHA256
++	if (doit[D_SHA256])
++		{
++		for (j=0; j<SIZE_NUM; j++)
++			{
++			print_message(names[D_SHA256],c[D_SHA256][j],lengths[j]);
++			Time_F(START);
++			for (count=0,run=1; COND(c[D_SHA256][j]); count++)
++				SHA256(buf,lengths[j],sha256);
++			d=Time_F(STOP);
++			print_result(D_SHA256,j,count,d);
++			}
++		}
++#endif
++
++#ifndef OPENSSL_NO_SHA512
++	if (doit[D_SHA512])
++		{
++		for (j=0; j<SIZE_NUM; j++)
++			{
++			print_message(names[D_SHA512],c[D_SHA512][j],lengths[j]);
++			Time_F(START);
++			for (count=0,run=1; COND(c[D_SHA512][j]); count++)
++				SHA512(buf,lengths[j],sha512);
++			d=Time_F(STOP);
++			print_result(D_SHA512,j,count,d);
++			}
++		}
++#endif
++
++#endif
++#ifndef OPENSSL_NO_RIPEMD
++	if (doit[D_RMD160])
++		{
++		for (j=0; j<SIZE_NUM; j++)
++			{
++			print_message(names[D_RMD160],c[D_RMD160][j],lengths[j]);
++			Time_F(START);
++			for (count=0,run=1; COND(c[D_RMD160][j]); count++)
++				EVP_Digest(buf,(unsigned long)lengths[j],&(rmd160[0]),NULL,EVP_ripemd160(),NULL);
++			d=Time_F(STOP);
++			print_result(D_RMD160,j,count,d);
++			}
++		}
++#endif
++#ifndef OPENSSL_NO_RC4
++	if (doit[D_RC4])
++		{
++		for (j=0; j<SIZE_NUM; j++)
++			{
++			print_message(names[D_RC4],c[D_RC4][j],lengths[j]);
++			Time_F(START);
++			for (count=0,run=1; COND(c[D_RC4][j]); count++)
++				RC4(&rc4_ks,(unsigned int)lengths[j],
++					buf,buf);
++			d=Time_F(STOP);
++			print_result(D_RC4,j,count,d);
++			}
++		}
++#endif
++#ifndef OPENSSL_NO_DES
++	if (doit[D_CBC_DES])
++		{
++		for (j=0; j<SIZE_NUM; j++)
++			{
++			print_message(names[D_CBC_DES],c[D_CBC_DES][j],lengths[j]);
++			Time_F(START);
++			for (count=0,run=1; COND(c[D_CBC_DES][j]); count++)
++				DES_ncbc_encrypt(buf,buf,lengths[j],&sch,
++						 &DES_iv,DES_ENCRYPT);
++			d=Time_F(STOP);
++			print_result(D_CBC_DES,j,count,d);
++			}
++		}
++
++	if (doit[D_EDE3_DES])
++		{
++		for (j=0; j<SIZE_NUM; j++)
++			{
++			print_message(names[D_EDE3_DES],c[D_EDE3_DES][j],lengths[j]);
++			Time_F(START);
++			for (count=0,run=1; COND(c[D_EDE3_DES][j]); count++)
++				DES_ede3_cbc_encrypt(buf,buf,lengths[j],
++						     &sch,&sch2,&sch3,
++						     &DES_iv,DES_ENCRYPT);
++			d=Time_F(STOP);
++			print_result(D_EDE3_DES,j,count,d);
++			}
++		}
++#endif
++#ifndef OPENSSL_NO_AES
++	if (doit[D_CBC_128_AES])
++		{
++		for (j=0; j<SIZE_NUM; j++)
++			{
++			print_message(names[D_CBC_128_AES],c[D_CBC_128_AES][j],lengths[j]);
++			Time_F(START);
++			for (count=0,run=1; COND(c[D_CBC_128_AES][j]); count++)
++				AES_cbc_encrypt(buf,buf,
++					(unsigned long)lengths[j],&aes_ks1,
++					iv,AES_ENCRYPT);
++			d=Time_F(STOP);
++			print_result(D_CBC_128_AES,j,count,d);
++			}
++		}
++	if (doit[D_CBC_192_AES])
++		{
++		for (j=0; j<SIZE_NUM; j++)
++			{
++			print_message(names[D_CBC_192_AES],c[D_CBC_192_AES][j],lengths[j]);
++			Time_F(START);
++			for (count=0,run=1; COND(c[D_CBC_192_AES][j]); count++)
++				AES_cbc_encrypt(buf,buf,
++					(unsigned long)lengths[j],&aes_ks2,
++					iv,AES_ENCRYPT);
++			d=Time_F(STOP);
++			print_result(D_CBC_192_AES,j,count,d);
++			}
++		}
++	if (doit[D_CBC_256_AES])
++		{
++		for (j=0; j<SIZE_NUM; j++)
++			{
++			print_message(names[D_CBC_256_AES],c[D_CBC_256_AES][j],lengths[j]);
++			Time_F(START);
++			for (count=0,run=1; COND(c[D_CBC_256_AES][j]); count++)
++				AES_cbc_encrypt(buf,buf,
++					(unsigned long)lengths[j],&aes_ks3,
++					iv,AES_ENCRYPT);
++			d=Time_F(STOP);
++			print_result(D_CBC_256_AES,j,count,d);
++			}
++		}
++
++	if (doit[D_IGE_128_AES])
++		{
++		for (j=0; j<SIZE_NUM; j++)
++			{
++			print_message(names[D_IGE_128_AES],c[D_IGE_128_AES][j],lengths[j]);
++			Time_F(START);
++			for (count=0,run=1; COND(c[D_IGE_128_AES][j]); count++)
++				AES_ige_encrypt(buf,buf2,
++					(unsigned long)lengths[j],&aes_ks1,
++					iv,AES_ENCRYPT);
++			d=Time_F(STOP);
++			print_result(D_IGE_128_AES,j,count,d);
++			}
++		}
++	if (doit[D_IGE_192_AES])
++		{
++		for (j=0; j<SIZE_NUM; j++)
++			{
++			print_message(names[D_IGE_192_AES],c[D_IGE_192_AES][j],lengths[j]);
++			Time_F(START);
++			for (count=0,run=1; COND(c[D_IGE_192_AES][j]); count++)
++				AES_ige_encrypt(buf,buf2,
++					(unsigned long)lengths[j],&aes_ks2,
++					iv,AES_ENCRYPT);
++			d=Time_F(STOP);
++			print_result(D_IGE_192_AES,j,count,d);
++			}
++		}
++	if (doit[D_IGE_256_AES])
++		{
++		for (j=0; j<SIZE_NUM; j++)
++			{
++			print_message(names[D_IGE_256_AES],c[D_IGE_256_AES][j],lengths[j]);
++			Time_F(START);
++			for (count=0,run=1; COND(c[D_IGE_256_AES][j]); count++)
++				AES_ige_encrypt(buf,buf2,
++					(unsigned long)lengths[j],&aes_ks3,
++					iv,AES_ENCRYPT);
++			d=Time_F(STOP);
++			print_result(D_IGE_256_AES,j,count,d);
++			}
++		}
++#endif
++#ifndef OPENSSL_NO_CAMELLIA
++	if (doit[D_CBC_128_CML])
++		{
++		for (j=0; j<SIZE_NUM; j++)
++			{
++			print_message(names[D_CBC_128_CML],c[D_CBC_128_CML][j],lengths[j]);
++			Time_F(START);
++			for (count=0,run=1; COND(c[D_CBC_128_CML][j]); count++)
++				Camellia_cbc_encrypt(buf,buf,
++				        (unsigned long)lengths[j],&camellia_ks1,
++				        iv,CAMELLIA_ENCRYPT);
++			d=Time_F(STOP);
++			print_result(D_CBC_128_CML,j,count,d);
++			}
++		}
++	if (doit[D_CBC_192_CML])
++		{
++		for (j=0; j<SIZE_NUM; j++)
++			{
++			print_message(names[D_CBC_192_CML],c[D_CBC_192_CML][j],lengths[j]);
++			Time_F(START);
++			for (count=0,run=1; COND(c[D_CBC_192_CML][j]); count++)
++				Camellia_cbc_encrypt(buf,buf,
++				        (unsigned long)lengths[j],&camellia_ks2,
++				        iv,CAMELLIA_ENCRYPT);
++			d=Time_F(STOP);
++			print_result(D_CBC_192_CML,j,count,d);
++			}
++		}
++	if (doit[D_CBC_256_CML])
++		{
++		for (j=0; j<SIZE_NUM; j++)
++			{
++			print_message(names[D_CBC_256_CML],c[D_CBC_256_CML][j],lengths[j]);
++			Time_F(START);
++			for (count=0,run=1; COND(c[D_CBC_256_CML][j]); count++)
++				Camellia_cbc_encrypt(buf,buf,
++				        (unsigned long)lengths[j],&camellia_ks3,
++				        iv,CAMELLIA_ENCRYPT);
++			d=Time_F(STOP);
++			print_result(D_CBC_256_CML,j,count,d);
++			}
++		}
++
++#endif
++#ifndef OPENSSL_NO_IDEA
++	if (doit[D_CBC_IDEA])
++		{
++		for (j=0; j<SIZE_NUM; j++)
++			{
++			print_message(names[D_CBC_IDEA],c[D_CBC_IDEA][j],lengths[j]);
++			Time_F(START);
++			for (count=0,run=1; COND(c[D_CBC_IDEA][j]); count++)
++				idea_cbc_encrypt(buf,buf,
++					(unsigned long)lengths[j],&idea_ks,
++					iv,IDEA_ENCRYPT);
++			d=Time_F(STOP);
++			print_result(D_CBC_IDEA,j,count,d);
++			}
++		}
++#endif
++#ifndef OPENSSL_NO_SEED
++	if (doit[D_CBC_SEED])
++		{
++		for (j=0; j<SIZE_NUM; j++)
++			{
++			print_message(names[D_CBC_SEED],c[D_CBC_SEED][j],lengths[j]);
++			Time_F(START);
++			for (count=0,run=1; COND(c[D_CBC_SEED][j]); count++)
++				SEED_cbc_encrypt(buf,buf,
++					(unsigned long)lengths[j],&seed_ks,iv,1);
++			d=Time_F(STOP);
++			print_result(D_CBC_SEED,j,count,d);
++			}
++		}
++#endif
++#ifndef OPENSSL_NO_RC2
++	if (doit[D_CBC_RC2])
++		{
++		for (j=0; j<SIZE_NUM; j++)
++			{
++			print_message(names[D_CBC_RC2],c[D_CBC_RC2][j],lengths[j]);
++			Time_F(START);
++			for (count=0,run=1; COND(c[D_CBC_RC2][j]); count++)
++				RC2_cbc_encrypt(buf,buf,
++					(unsigned long)lengths[j],&rc2_ks,
++					iv,RC2_ENCRYPT);
++			d=Time_F(STOP);
++			print_result(D_CBC_RC2,j,count,d);
++			}
++		}
++#endif
++#ifndef OPENSSL_NO_RC5
++	if (doit[D_CBC_RC5])
++		{
++		for (j=0; j<SIZE_NUM; j++)
++			{
++			print_message(names[D_CBC_RC5],c[D_CBC_RC5][j],lengths[j]);
++			Time_F(START);
++			for (count=0,run=1; COND(c[D_CBC_RC5][j]); count++)
++				RC5_32_cbc_encrypt(buf,buf,
++					(unsigned long)lengths[j],&rc5_ks,
++					iv,RC5_ENCRYPT);
++			d=Time_F(STOP);
++			print_result(D_CBC_RC5,j,count,d);
++			}
++		}
++#endif
++#ifndef OPENSSL_NO_BF
++	if (doit[D_CBC_BF])
++		{
++		for (j=0; j<SIZE_NUM; j++)
++			{
++			print_message(names[D_CBC_BF],c[D_CBC_BF][j],lengths[j]);
++			Time_F(START);
++			for (count=0,run=1; COND(c[D_CBC_BF][j]); count++)
++				BF_cbc_encrypt(buf,buf,
++					(unsigned long)lengths[j],&bf_ks,
++					iv,BF_ENCRYPT);
++			d=Time_F(STOP);
++			print_result(D_CBC_BF,j,count,d);
++			}
++		}
++#endif
++#ifndef OPENSSL_NO_CAST
++	if (doit[D_CBC_CAST])
++		{
++		for (j=0; j<SIZE_NUM; j++)
++			{
++			print_message(names[D_CBC_CAST],c[D_CBC_CAST][j],lengths[j]);
++			Time_F(START);
++			for (count=0,run=1; COND(c[D_CBC_CAST][j]); count++)
++				CAST_cbc_encrypt(buf,buf,
++					(unsigned long)lengths[j],&cast_ks,
++					iv,CAST_ENCRYPT);
++			d=Time_F(STOP);
++			print_result(D_CBC_CAST,j,count,d);
++			}
++		}
++#endif
++
++	if (doit[D_EVP])
++		{
++		for (j=0; j<SIZE_NUM; j++)
++			{
++			if (evp_cipher)
++				{
++				EVP_CIPHER_CTX ctx;
++				int outl;
++
++				names[D_EVP]=OBJ_nid2ln(evp_cipher->nid);
++				/* -O3 -fschedule-insns messes up an
++				 * optimization here!  names[D_EVP]
++				 * somehow becomes NULL */
++				print_message(names[D_EVP],save_count,
++					lengths[j]);
++
++				EVP_CIPHER_CTX_init(&ctx);
++				if(decrypt)
++					EVP_DecryptInit_ex(&ctx,evp_cipher,NULL,key16,iv);
++				else
++					EVP_EncryptInit_ex(&ctx,evp_cipher,NULL,key16,iv);
++				EVP_CIPHER_CTX_set_padding(&ctx, 0);
++
++				Time_F(START);
++				if(decrypt)
++					for (count=0,run=1; COND(save_count*4*lengths[0]/lengths[j]); count++)
++						EVP_DecryptUpdate(&ctx,buf,&outl,buf,lengths[j]);
++				else
++					for (count=0,run=1; COND(save_count*4*lengths[0]/lengths[j]); count++)
++						EVP_EncryptUpdate(&ctx,buf,&outl,buf,lengths[j]);
++				if(decrypt)
++					EVP_DecryptFinal_ex(&ctx,buf,&outl);
++				else
++					EVP_EncryptFinal_ex(&ctx,buf,&outl);
++				d=Time_F(STOP);
++				EVP_CIPHER_CTX_cleanup(&ctx);
++				}
++			if (evp_md)
++				{
++				names[D_EVP]=OBJ_nid2ln(evp_md->type);
++				print_message(names[D_EVP],save_count,
++					lengths[j]);
++
++				Time_F(START);
++				for (count=0,run=1; COND(save_count*4*lengths[0]/lengths[j]); count++)
++					EVP_Digest(buf,lengths[j],&(md[0]),NULL,evp_md,NULL);
++
++				d=Time_F(STOP);
++				}
++			print_result(D_EVP,j,count,d);
++			}
++		}
++
++	RAND_pseudo_bytes(buf,36);
++#ifndef OPENSSL_NO_RSA
++	for (j=0; j<RSA_NUM; j++)
++		{
++		int ret;
++		if (!rsa_doit[j]) continue;
++		ret=RSA_sign(NID_md5_sha1, buf,36, buf2, &rsa_num, rsa_key[j]);
++		if (ret == 0)
++			{
++			BIO_printf(bio_err,"RSA sign failure.  No RSA sign will be done.\n");
++			ERR_print_errors(bio_err);
++			rsa_count=1;
++			}
++		else
++			{
++			pkey_print_message("private","rsa",
++				rsa_c[j][0],rsa_bits[j],
++				RSA_SECONDS);
++/*			RSA_blinding_on(rsa_key[j],NULL); */
++			Time_F(START);
++			for (count=0,run=1; COND(rsa_c[j][0]); count++)
++				{
++				ret=RSA_sign(NID_md5_sha1, buf,36, buf2,
++					&rsa_num, rsa_key[j]);
++				if (ret == 0)
++					{
++					BIO_printf(bio_err,
++						"RSA sign failure\n");
++					ERR_print_errors(bio_err);
++					count=1;
++					break;
++					}
++				}
++			d=Time_F(STOP);
++			BIO_printf(bio_err,mr ? "+R1:%ld:%d:%.2f\n"
++				   : "%ld %d bit private RSA's in %.2fs\n",
++				   count,rsa_bits[j],d);
++			rsa_results[j][0]=d/(double)count;
++			rsa_count=count;
++			}
++
++#if 1
++		ret=RSA_verify(NID_md5_sha1, buf,36, buf2, rsa_num, rsa_key[j]);
++		if (ret <= 0)
++			{
++			BIO_printf(bio_err,"RSA verify failure.  No RSA verify will be done.\n");
++			ERR_print_errors(bio_err);
++			rsa_doit[j] = 0;
++			}
++		else
++			{
++			pkey_print_message("public","rsa",
++				rsa_c[j][1],rsa_bits[j],
++				RSA_SECONDS);
++			Time_F(START);
++			for (count=0,run=1; COND(rsa_c[j][1]); count++)
++				{
++				ret=RSA_verify(NID_md5_sha1, buf,36, buf2,
++					rsa_num, rsa_key[j]);
++				if (ret <= 0)
++					{
++					BIO_printf(bio_err,
++						"RSA verify failure\n");
++					ERR_print_errors(bio_err);
++					count=1;
++					break;
++					}
++				}
++			d=Time_F(STOP);
++			BIO_printf(bio_err,mr ? "+R2:%ld:%d:%.2f\n"
++				   : "%ld %d bit public RSA's in %.2fs\n",
++				   count,rsa_bits[j],d);
++			rsa_results[j][1]=d/(double)count;
++			}
++#endif
++
++		if (rsa_count <= 1)
++			{
++			/* if longer than 10s, don't do any more */
++			for (j++; j<RSA_NUM; j++)
++				rsa_doit[j]=0;
++			}
++		}
++#endif
++
++	RAND_pseudo_bytes(buf,20);
++#ifndef OPENSSL_NO_DSA
++	if (RAND_status() != 1)
++		{
++		RAND_seed(rnd_seed, sizeof rnd_seed);
++		rnd_fake = 1;
++		}
++	for (j=0; j<DSA_NUM; j++)
++		{
++		unsigned int kk;
++		int ret;
++
++		if (!dsa_doit[j]) continue;
++/*		DSA_generate_key(dsa_key[j]); */
++/*		DSA_sign_setup(dsa_key[j],NULL); */
++		ret=DSA_sign(EVP_PKEY_DSA,buf,20,buf2,
++			&kk,dsa_key[j]);
++		if (ret == 0)
++			{
++			BIO_printf(bio_err,"DSA sign failure.  No DSA sign will be done.\n");
++			ERR_print_errors(bio_err);
++			rsa_count=1;
++			}
++		else
++			{
++			pkey_print_message("sign","dsa",
++				dsa_c[j][0],dsa_bits[j],
++				DSA_SECONDS);
++			Time_F(START);
++			for (count=0,run=1; COND(dsa_c[j][0]); count++)
++				{
++				ret=DSA_sign(EVP_PKEY_DSA,buf,20,buf2,
++					&kk,dsa_key[j]);
++				if (ret == 0)
++					{
++					BIO_printf(bio_err,
++						"DSA sign failure\n");
++					ERR_print_errors(bio_err);
++					count=1;
++					break;
++					}
++				}
++			d=Time_F(STOP);
++			BIO_printf(bio_err,mr ? "+R3:%ld:%d:%.2f\n"
++				   : "%ld %d bit DSA signs in %.2fs\n",
++				   count,dsa_bits[j],d);
++			dsa_results[j][0]=d/(double)count;
++			rsa_count=count;
++			}
++
++		ret=DSA_verify(EVP_PKEY_DSA,buf,20,buf2,
++			kk,dsa_key[j]);
++		if (ret <= 0)
++			{
++			BIO_printf(bio_err,"DSA verify failure.  No DSA verify will be done.\n");
++			ERR_print_errors(bio_err);
++			dsa_doit[j] = 0;
++			}
++		else
++			{
++			pkey_print_message("verify","dsa",
++				dsa_c[j][1],dsa_bits[j],
++				DSA_SECONDS);
++			Time_F(START);
++			for (count=0,run=1; COND(dsa_c[j][1]); count++)
++				{
++				ret=DSA_verify(EVP_PKEY_DSA,buf,20,buf2,
++					kk,dsa_key[j]);
++				if (ret <= 0)
++					{
++					BIO_printf(bio_err,
++						"DSA verify failure\n");
++					ERR_print_errors(bio_err);
++					count=1;
++					break;
++					}
++				}
++			d=Time_F(STOP);
++			BIO_printf(bio_err,mr ? "+R4:%ld:%d:%.2f\n"
++				   : "%ld %d bit DSA verify in %.2fs\n",
++				   count,dsa_bits[j],d);
++			dsa_results[j][1]=d/(double)count;
++			}
++
++		if (rsa_count <= 1)
++			{
++			/* if longer than 10s, don't do any more */
++			for (j++; j<DSA_NUM; j++)
++				dsa_doit[j]=0;
++			}
++		}
++	if (rnd_fake) RAND_cleanup();
++#endif
++
++#ifndef OPENSSL_NO_ECDSA
++	if (RAND_status() != 1) 
++		{
++		RAND_seed(rnd_seed, sizeof rnd_seed);
++		rnd_fake = 1;
++		}
++	for (j=0; j<EC_NUM; j++) 
++		{
++		int ret;
++
++		if (!ecdsa_doit[j]) continue; /* Ignore Curve */ 
++		ecdsa[j] = EC_KEY_new_by_curve_name(test_curves[j]);
++		if (ecdsa[j] == NULL) 
++			{
++			BIO_printf(bio_err,"ECDSA failure.\n");
++			ERR_print_errors(bio_err);
++			rsa_count=1;
++			} 
++		else 
++			{
++#if 1
++			EC_KEY_precompute_mult(ecdsa[j], NULL);
++#endif
++			/* Perform ECDSA signature test */
++			EC_KEY_generate_key(ecdsa[j]);
++			ret = ECDSA_sign(0, buf, 20, ecdsasig, 
++				&ecdsasiglen, ecdsa[j]);
++			if (ret == 0) 
++				{
++				BIO_printf(bio_err,"ECDSA sign failure.  No ECDSA sign will be done.\n");
++				ERR_print_errors(bio_err);
++				rsa_count=1;
++				} 
++			else 
++				{
++				pkey_print_message("sign","ecdsa",
++					ecdsa_c[j][0], 
++					test_curves_bits[j],
++					ECDSA_SECONDS);
++
++				Time_F(START);
++				for (count=0,run=1; COND(ecdsa_c[j][0]);
++					count++) 
++					{
++					ret=ECDSA_sign(0, buf, 20, 
++						ecdsasig, &ecdsasiglen,
++						ecdsa[j]);
++					if (ret == 0) 
++						{
++						BIO_printf(bio_err, "ECDSA sign failure\n");
++						ERR_print_errors(bio_err);
++						count=1;
++						break;
++						}
++					}
++				d=Time_F(STOP);
++
++				BIO_printf(bio_err, mr ? "+R5:%ld:%d:%.2f\n" :
++					"%ld %d bit ECDSA signs in %.2fs \n", 
++					count, test_curves_bits[j], d);
++				ecdsa_results[j][0]=d/(double)count;
++				rsa_count=count;
++				}
++
++			/* Perform ECDSA verification test */
++			ret=ECDSA_verify(0, buf, 20, ecdsasig, 
++				ecdsasiglen, ecdsa[j]);
++			if (ret != 1) 
++				{
++				BIO_printf(bio_err,"ECDSA verify failure.  No ECDSA verify will be done.\n");
++				ERR_print_errors(bio_err);
++				ecdsa_doit[j] = 0;
++				} 
++			else 
++				{
++				pkey_print_message("verify","ecdsa",
++				ecdsa_c[j][1],
++				test_curves_bits[j],
++				ECDSA_SECONDS);
++				Time_F(START);
++				for (count=0,run=1; COND(ecdsa_c[j][1]); count++) 
++					{
++					ret=ECDSA_verify(0, buf, 20, ecdsasig, ecdsasiglen, ecdsa[j]);
++					if (ret != 1) 
++						{
++						BIO_printf(bio_err, "ECDSA verify failure\n");
++						ERR_print_errors(bio_err);
++						count=1;
++						break;
++						}
++					}
++				d=Time_F(STOP);
++				BIO_printf(bio_err, mr? "+R6:%ld:%d:%.2f\n"
++						: "%ld %d bit ECDSA verify in %.2fs\n",
++				count, test_curves_bits[j], d);
++				ecdsa_results[j][1]=d/(double)count;
++				}
++
++			if (rsa_count <= 1) 
++				{
++				/* if longer than 10s, don't do any more */
++				for (j++; j<EC_NUM; j++)
++				ecdsa_doit[j]=0;
++				}
++			}
++		}
++	if (rnd_fake) RAND_cleanup();
++#endif
++
++#ifndef OPENSSL_NO_ECDH
++	if (RAND_status() != 1)
++		{
++		RAND_seed(rnd_seed, sizeof rnd_seed);
++		rnd_fake = 1;
++		}
++	for (j=0; j<EC_NUM; j++)
++		{
++		if (!ecdh_doit[j]) continue;
++		ecdh_a[j] = EC_KEY_new_by_curve_name(test_curves[j]);
++		ecdh_b[j] = EC_KEY_new_by_curve_name(test_curves[j]);
++		if ((ecdh_a[j] == NULL) || (ecdh_b[j] == NULL))
++			{
++			BIO_printf(bio_err,"ECDH failure.\n");
++			ERR_print_errors(bio_err);
++			rsa_count=1;
++			}
++		else
++			{
++			/* generate two ECDH key pairs */
++			if (!EC_KEY_generate_key(ecdh_a[j]) ||
++				!EC_KEY_generate_key(ecdh_b[j]))
++				{
++				BIO_printf(bio_err,"ECDH key generation failure.\n");
++				ERR_print_errors(bio_err);
++				rsa_count=1;		
++				}
++			else
++				{
++				/* If field size is not more than 24 octets, then use SHA-1 hash of result;
++				 * otherwise, use result (see section 4.8 of draft-ietf-tls-ecc-03.txt).
++				 */
++				int field_size, outlen;
++				void *(*kdf)(const void *in, size_t inlen, void *out, size_t *xoutlen);
++				field_size = EC_GROUP_get_degree(EC_KEY_get0_group(ecdh_a[j]));
++				if (field_size <= 24 * 8)
++					{
++					outlen = KDF1_SHA1_len;
++					kdf = KDF1_SHA1;
++					}
++				else
++					{
++					outlen = (field_size+7)/8;
++					kdf = NULL;
++					}
++				secret_size_a = ECDH_compute_key(secret_a, outlen,
++					EC_KEY_get0_public_key(ecdh_b[j]),
++					ecdh_a[j], kdf);
++				secret_size_b = ECDH_compute_key(secret_b, outlen,
++					EC_KEY_get0_public_key(ecdh_a[j]),
++					ecdh_b[j], kdf);
++				if (secret_size_a != secret_size_b) 
++					ecdh_checks = 0;
++				else
++					ecdh_checks = 1;
++
++				for (secret_idx = 0; 
++				    (secret_idx < secret_size_a)
++					&& (ecdh_checks == 1);
++				    secret_idx++)
++					{
++					if (secret_a[secret_idx] != secret_b[secret_idx])
++					ecdh_checks = 0;
++					}
++
++				if (ecdh_checks == 0)
++					{
++					BIO_printf(bio_err,"ECDH computations don't match.\n");
++					ERR_print_errors(bio_err);
++					rsa_count=1;		
++					}
++
++				pkey_print_message("","ecdh",
++				ecdh_c[j][0], 
++				test_curves_bits[j],
++				ECDH_SECONDS);
++				Time_F(START);
++				for (count=0,run=1; COND(ecdh_c[j][0]); count++)
++					{
++					ECDH_compute_key(secret_a, outlen,
++					EC_KEY_get0_public_key(ecdh_b[j]),
++					ecdh_a[j], kdf);
++					}
++				d=Time_F(STOP);
++				BIO_printf(bio_err, mr ? "+R7:%ld:%d:%.2f\n" :"%ld %d-bit ECDH ops in %.2fs\n",
++				count, test_curves_bits[j], d);
++				ecdh_results[j][0]=d/(double)count;
++				rsa_count=count;
++				}
++			}
++
++
++		if (rsa_count <= 1)
++			{
++			/* if longer than 10s, don't do any more */
++			for (j++; j<EC_NUM; j++)
++			ecdh_doit[j]=0;
++			}
++		}
++	if (rnd_fake) RAND_cleanup();
++#endif
++#ifdef HAVE_FORK
++show_res:
++#endif
++	if(!mr)
++		{
++		fprintf(stdout,"%s\n",SSLeay_version(SSLEAY_VERSION));
++        fprintf(stdout,"%s\n",SSLeay_version(SSLEAY_BUILT_ON));
++		printf("options:");
++		printf("%s ",BN_options());
++#ifndef OPENSSL_NO_MD2
++		printf("%s ",MD2_options());
++#endif
++#ifndef OPENSSL_NO_RC4
++		printf("%s ",RC4_options());
++#endif
++#ifndef OPENSSL_NO_DES
++		printf("%s ",DES_options());
++#endif
++#ifndef OPENSSL_NO_AES
++		printf("%s ",AES_options());
++#endif
++#ifndef OPENSSL_NO_IDEA
++		printf("%s ",idea_options());
++#endif
++#ifndef OPENSSL_NO_BF
++		printf("%s ",BF_options());
++#endif
++		fprintf(stdout,"\n%s\n",SSLeay_version(SSLEAY_CFLAGS));
++		printf("available timing options: ");
++#ifdef TIMES
++		printf("TIMES ");
++#endif
++#ifdef TIMEB
++		printf("TIMEB ");
++#endif
++#ifdef USE_TOD
++		printf("USE_TOD ");
++#endif
++#ifdef HZ
++#define as_string(s) (#s)
++		{
++		double dbl = HZ;
++		printf("HZ=%g", dbl);
++		}
++# ifdef _SC_CLK_TCK
++		printf(" [sysconf value]");
++# endif
++#endif
++		printf("\n");
++		printf("timing function used: %s%s%s%s%s%s%s\n",
++		       (ftime_used ? "ftime" : ""),
++		       (ftime_used + times_used > 1 ? "," : ""),
++		       (times_used ? "times" : ""),
++		       (ftime_used + times_used + gettimeofday_used > 1 ? "," : ""),
++		       (gettimeofday_used ? "gettimeofday" : ""),
++		       (ftime_used + times_used + gettimeofday_used + getrusage_used > 1 ? "," : ""),
++		       (getrusage_used ? "getrusage" : ""));
++		}
++
++	if (pr_header)
++		{
++		if(mr)
++			fprintf(stdout,"+H");
++		else
++			{
++			fprintf(stdout,"The 'numbers' are in 1000s of bytes per second processed.\n"); 
++			fprintf(stdout,"type        ");
++			}
++		for (j=0;  j<SIZE_NUM; j++)
++			fprintf(stdout,mr ? ":%d" : "%7d bytes",lengths[j]);
++		fprintf(stdout,"\n");
++		}
++
++	for (k=0; k<ALGOR_NUM; k++)
++		{
++		if (!doit[k]) continue;
++		if(mr)
++			fprintf(stdout,"+F:%d:%s",k,names[k]);
++		else
++			fprintf(stdout,"%-13s",names[k]);
++		for (j=0; j<SIZE_NUM; j++)
++			{
++			if (results[k][j] > 10000 && !mr)
++				fprintf(stdout," %11.2fk",results[k][j]/1e3);
++			else
++				fprintf(stdout,mr ? ":%.2f" : " %11.2f ",results[k][j]);
++			}
++		fprintf(stdout,"\n");
++		}
++#ifndef OPENSSL_NO_RSA
++	j=1;
++	for (k=0; k<RSA_NUM; k++)
++		{
++		if (!rsa_doit[k]) continue;
++		if (j && !mr)
++			{
++			printf("%18ssign    verify    sign/s verify/s\n"," ");
++			j=0;
++			}
++		if(mr)
++			fprintf(stdout,"+F2:%u:%u:%f:%f\n",
++				k,rsa_bits[k],rsa_results[k][0],
++				rsa_results[k][1]);
++		else
++			fprintf(stdout,"rsa %4u bits %8.6fs %8.6fs %8.1f %8.1f\n",
++				rsa_bits[k],rsa_results[k][0],rsa_results[k][1],
++				1.0/rsa_results[k][0],1.0/rsa_results[k][1]);
++		}
++#endif
++#ifndef OPENSSL_NO_DSA
++	j=1;
++	for (k=0; k<DSA_NUM; k++)
++		{
++		if (!dsa_doit[k]) continue;
++		if (j && !mr)
++			{
++			printf("%18ssign    verify    sign/s verify/s\n"," ");
++			j=0;
++			}
++		if(mr)
++			fprintf(stdout,"+F3:%u:%u:%f:%f\n",
++				k,dsa_bits[k],dsa_results[k][0],dsa_results[k][1]);
++		else
++			fprintf(stdout,"dsa %4u bits %8.6fs %8.6fs %8.1f %8.1f\n",
++				dsa_bits[k],dsa_results[k][0],dsa_results[k][1],
++				1.0/dsa_results[k][0],1.0/dsa_results[k][1]);
++		}
++#endif
++#ifndef OPENSSL_NO_ECDSA
++	j=1;
++	for (k=0; k<EC_NUM; k++)
++		{
++		if (!ecdsa_doit[k]) continue;
++		if (j && !mr)
++			{
++			printf("%30ssign    verify    sign/s verify/s\n"," ");
++			j=0;
++			}
++
++		if (mr)
++			fprintf(stdout,"+F4:%u:%u:%f:%f\n", 
++				k, test_curves_bits[k],
++				ecdsa_results[k][0],ecdsa_results[k][1]);
++		else
++			fprintf(stdout,
++				"%4u bit ecdsa (%s) %8.4fs %8.4fs %8.1f %8.1f\n", 
++				test_curves_bits[k],
++				test_curves_names[k],
++				ecdsa_results[k][0],ecdsa_results[k][1], 
++				1.0/ecdsa_results[k][0],1.0/ecdsa_results[k][1]);
++		}
++#endif
++
++
++#ifndef OPENSSL_NO_ECDH
++	j=1;
++	for (k=0; k<EC_NUM; k++)
++		{
++		if (!ecdh_doit[k]) continue;
++		if (j && !mr)
++			{
++			printf("%30sop      op/s\n"," ");
++			j=0;
++			}
++		if (mr)
++			fprintf(stdout,"+F5:%u:%u:%f:%f\n",
++				k, test_curves_bits[k],
++				ecdh_results[k][0], 1.0/ecdh_results[k][0]);
++
++		else
++			fprintf(stdout,"%4u bit ecdh (%s) %8.4fs %8.1f\n",
++				test_curves_bits[k],
++				test_curves_names[k],
++				ecdh_results[k][0], 1.0/ecdh_results[k][0]);
++		}
++#endif
++
++	mret=0;
++
++end:
++	ERR_print_errors(bio_err);
++	if (buf != NULL) OPENSSL_free(buf);
++	if (buf2 != NULL) OPENSSL_free(buf2);
++#ifndef OPENSSL_NO_RSA
++	for (i=0; i<RSA_NUM; i++)
++		if (rsa_key[i] != NULL)
++			RSA_free(rsa_key[i]);
++#endif
++#ifndef OPENSSL_NO_DSA
++	for (i=0; i<DSA_NUM; i++)
++		if (dsa_key[i] != NULL)
++			DSA_free(dsa_key[i]);
++#endif
++
++#ifndef OPENSSL_NO_ECDSA
++	for (i=0; i<EC_NUM; i++)
++		if (ecdsa[i] != NULL)
++			EC_KEY_free(ecdsa[i]);
++#endif
++#ifndef OPENSSL_NO_ECDH
++	for (i=0; i<EC_NUM; i++)
++	{
++		if (ecdh_a[i] != NULL)
++			EC_KEY_free(ecdh_a[i]);
++		if (ecdh_b[i] != NULL)
++			EC_KEY_free(ecdh_b[i]);
++	}
++#endif
++
++	apps_shutdown();
++	OPENSSL_EXIT(mret);
++	}
++
++static void print_message(const char *s, long num, int length)
++	{
++#ifdef SIGALRM
++	BIO_printf(bio_err,mr ? "+DT:%s:%d:%d\n"
++		   : "Doing %s for %ds on %d size blocks: ",s,SECONDS,length);
++	(void)BIO_flush(bio_err);
++	alarm(SECONDS);
++#else
++	BIO_printf(bio_err,mr ? "+DN:%s:%ld:%d\n"
++		   : "Doing %s %ld times on %d size blocks: ",s,num,length);
++	(void)BIO_flush(bio_err);
++#endif
++#ifdef LINT
++	num=num;
++#endif
++	}
++
++static void pkey_print_message(const char *str, const char *str2, long num,
++	int bits, int tm)
++	{
++#ifdef SIGALRM
++	BIO_printf(bio_err,mr ? "+DTP:%d:%s:%s:%d\n"
++			   : "Doing %d bit %s %s's for %ds: ",bits,str,str2,tm);
++	(void)BIO_flush(bio_err);
++	alarm(RSA_SECONDS);
++#else
++	BIO_printf(bio_err,mr ? "+DNP:%ld:%d:%s:%s\n"
++			   : "Doing %ld %d bit %s %s's: ",num,bits,str,str2);
++	(void)BIO_flush(bio_err);
++#endif
++#ifdef LINT
++	num=num;
++#endif
++	}
++
++static void print_result(int alg,int run_no,int count,double time_used)
++	{
++	BIO_printf(bio_err,mr ? "+R:%d:%s:%f\n"
++		   : "%d %s's in %.2fs\n",count,names[alg],time_used);
++	results[alg][run_no]=((double)count)/time_used*lengths[run_no];
++	}
++
++#ifdef HAVE_FORK
++static char *sstrsep(char **string, const char *delim)
++    {
++    char isdelim[256];
++    char *token = *string;
++
++    if (**string == 0)
++        return NULL;
++
++    memset(isdelim, 0, sizeof isdelim);
++    isdelim[0] = 1;
++
++    while (*delim)
++        {
++        isdelim[(unsigned char)(*delim)] = 1;
++        delim++;
++        }
++
++    while (!isdelim[(unsigned char)(**string)])
++        {
++        (*string)++;
++        }
++
++    if (**string)
++        {
++        **string = 0;
++        (*string)++;
++        }
++
++    return token;
++    }
++
++static int do_multi(int multi)
++	{
++	int n;
++	int fd[2];
++	int *fds;
++	static char sep[]=":";
++
++	fds=malloc(multi*sizeof *fds);
++	for(n=0 ; n < multi ; ++n)
++		{
++		pipe(fd);
++		fflush(stdout);
++		fflush(stderr);
++		if(fork())
++			{
++			close(fd[1]);
++			fds[n]=fd[0];
++			}
++		else
++			{
++			close(fd[0]);
++			close(1);
++			dup(fd[1]);
++			close(fd[1]);
++			mr=1;
++			usertime=0;
++			return 0;
++			}
++		printf("Forked child %d\n",n);
++		}
++
++	/* for now, assume the pipe is long enough to take all the output */
++	for(n=0 ; n < multi ; ++n)
++		{
++		FILE *f;
++		char buf[1024];
++		char *p;
++
++		f=fdopen(fds[n],"r");
++		while(fgets(buf,sizeof buf,f))
++			{
++			p=strchr(buf,'\n');
++			if(p)
++				*p='\0';
++			if(buf[0] != '+')
++				{
++				fprintf(stderr,"Don't understand line '%s' from child %d\n",
++						buf,n);
++				continue;
++				}
++			printf("Got: %s from %d\n",buf,n);
++			if(!strncmp(buf,"+F:",3))
++				{
++				int alg;
++				int j;
++
++				p=buf+3;
++				alg=atoi(sstrsep(&p,sep));
++				sstrsep(&p,sep);
++				for(j=0 ; j < SIZE_NUM ; ++j)
++					results[alg][j]+=atof(sstrsep(&p,sep));
++				}
++			else if(!strncmp(buf,"+F2:",4))
++				{
++				int k;
++				double d;
++				
++				p=buf+4;
++				k=atoi(sstrsep(&p,sep));
++				sstrsep(&p,sep);
++
++				d=atof(sstrsep(&p,sep));
++				if(n)
++					rsa_results[k][0]=1/(1/rsa_results[k][0]+1/d);
++				else
++					rsa_results[k][0]=d;
++
++				d=atof(sstrsep(&p,sep));
++				if(n)
++					rsa_results[k][1]=1/(1/rsa_results[k][1]+1/d);
++				else
++					rsa_results[k][1]=d;
++				}
++			else if(!strncmp(buf,"+F2:",4))
++				{
++				int k;
++				double d;
++				
++				p=buf+4;
++				k=atoi(sstrsep(&p,sep));
++				sstrsep(&p,sep);
++
++				d=atof(sstrsep(&p,sep));
++				if(n)
++					rsa_results[k][0]=1/(1/rsa_results[k][0]+1/d);
++				else
++					rsa_results[k][0]=d;
++
++				d=atof(sstrsep(&p,sep));
++				if(n)
++					rsa_results[k][1]=1/(1/rsa_results[k][1]+1/d);
++				else
++					rsa_results[k][1]=d;
++				}
++			else if(!strncmp(buf,"+F3:",4))
++				{
++				int k;
++				double d;
++				
++				p=buf+4;
++				k=atoi(sstrsep(&p,sep));
++				sstrsep(&p,sep);
++
++				d=atof(sstrsep(&p,sep));
++				if(n)
++					dsa_results[k][0]=1/(1/dsa_results[k][0]+1/d);
++				else
++					dsa_results[k][0]=d;
++
++				d=atof(sstrsep(&p,sep));
++				if(n)
++					dsa_results[k][1]=1/(1/dsa_results[k][1]+1/d);
++				else
++					dsa_results[k][1]=d;
++				}
++#ifndef OPENSSL_NO_ECDSA
++			else if(!strncmp(buf,"+F4:",4))
++				{
++				int k;
++				double d;
++				
++				p=buf+4;
++				k=atoi(sstrsep(&p,sep));
++				sstrsep(&p,sep);
++
++				d=atof(sstrsep(&p,sep));
++				if(n)
++					ecdsa_results[k][0]=1/(1/ecdsa_results[k][0]+1/d);
++				else
++					ecdsa_results[k][0]=d;
++
++				d=atof(sstrsep(&p,sep));
++				if(n)
++					ecdsa_results[k][1]=1/(1/ecdsa_results[k][1]+1/d);
++				else
++					ecdsa_results[k][1]=d;
++				}
++#endif 
++
++#ifndef OPENSSL_NO_ECDH
++			else if(!strncmp(buf,"+F5:",4))
++				{
++				int k;
++				double d;
++				
++				p=buf+4;
++				k=atoi(sstrsep(&p,sep));
++				sstrsep(&p,sep);
++
++				d=atof(sstrsep(&p,sep));
++				if(n)
++					ecdh_results[k][0]=1/(1/ecdh_results[k][0]+1/d);
++				else
++					ecdh_results[k][0]=d;
++
++				}
++#endif
++
++			else if(!strncmp(buf,"+H:",3))
++				{
++				}
++			else
++				fprintf(stderr,"Unknown type '%s' from child %d\n",buf,n);
++			}
++		}
++	return 1;
++	}
++#endif
++#endif
+diff -Nru openssl-0.9.8l_a/config openssl-0.9.8l_b/config
+--- openssl-0.9.8l_a/config	2009-02-16 10:43:41.000000000 +0200
++++ openssl-0.9.8l_b/config	2009-12-08 17:44:45.000000000 +0200
+@@ -48,10 +48,10 @@
+ 
+ # First get uname entries that we use below
+ 
+-MACHINE=`(uname -m) 2>/dev/null` || MACHINE="unknown"
+-RELEASE=`(uname -r) 2>/dev/null` || RELEASE="unknown"
+-SYSTEM=`(uname -s) 2>/dev/null`  || SYSTEM="unknown"
+-VERSION=`(uname -v) 2>/dev/null` || VERSION="unknown"
++[ "$MACHINE" ] || MACHINE=`(uname -m) 2>/dev/null` || MACHINE="unknown"
++[ "$RELEASE" ] || RELEASE=`(uname -r) 2>/dev/null` || RELEASE="unknown"
++[ "$SYSTEM" ]  || SYSTEM=`(uname -s) 2>/dev/null`  || SYSTEM="unknown"
++[ "$VERSION" ] || VERSION=`(uname -v) 2>/dev/null` || VERSION="unknown"
+ 
+ 
+ # Now test for ISC and SCO, since it is has a braindamaged uname.
+@@ -270,7 +270,7 @@
+ 		echo "ppc-apple-darwin${VERSION}"
+ 		;;
+ 	    *)
+-		echo "i386-apple-darwin${VERSION}"
++		echo "${MACHINE}-apple-darwin${VERSION}"
+ 		;;
+ 	esac
+ 	exit 0
+@@ -488,6 +488,9 @@
+ # script above so we end up with values in vars but that would take
+ # more time that I want to waste at the moment
+ case "$GUESSOS" in
++  uClinux*)
++    OUT=uClinux-dist
++	;;
+   mips2-sgi-irix)
+ 	CPU=`(hinv -t cpu) 2>/dev/null | head -1 | sed 's/^CPU:[^R]*R\([0-9]*\).*/\1/'`
+ 	CPU=${CPU:-0}
+diff -Nru openssl-0.9.8l_a/config.orig openssl-0.9.8l_b/config.orig
+--- openssl-0.9.8l_a/config.orig	1970-01-01 02:00:00.000000000 +0200
++++ openssl-0.9.8l_b/config.orig	2009-02-16 10:43:41.000000000 +0200
+@@ -0,0 +1,888 @@
++#!/bin/sh
++#
++# OpenSSL config: determine the operating system and run ./Configure
++#
++# "config -h" for usage information.
++#
++#          this is a merge of minarch and GuessOS from the Apache Group.
++#          Originally written by Tim Hudson <tjh@cryptsoft.com>.
++
++# Original Apache Group comments on GuessOS
++
++# Simple OS/Platform guesser. Similar to config.guess but
++# much, much smaller. Since it was developed for use with
++# Apache, it follows under Apache's regular licensing
++# with one specific addition: Any changes or additions
++# to this script should be Emailed to the Apache
++# group (apache@apache.org) in general and to
++# Jim Jagielski (jim@jaguNET.com) in specific.
++#
++# Be as similar to the output of config.guess/config.sub
++# as possible.
++
++PREFIX=""
++SUFFIX=""
++TEST="false"
++EXE=""
++
++# pick up any command line args to config
++for i
++do
++case "$i" in 
++-d) PREFIX="debug-";;
++-t*) TEST="true";;
++-h*) TEST="true"; cat <<EOF
++Usage: config [options]
++ -d	Add a debug- prefix to machine choice.
++ -t	Test mode, do not run the Configure perl script.
++ -h	This help.
++
++Any other text will be passed to the Configure perl script.
++See INSTALL for instructions.
++
++EOF
++;;
++*) options=$options" $i" ;;
++esac
++done
++
++# First get uname entries that we use below
++
++MACHINE=`(uname -m) 2>/dev/null` || MACHINE="unknown"
++RELEASE=`(uname -r) 2>/dev/null` || RELEASE="unknown"
++SYSTEM=`(uname -s) 2>/dev/null`  || SYSTEM="unknown"
++VERSION=`(uname -v) 2>/dev/null` || VERSION="unknown"
++
++
++# Now test for ISC and SCO, since it is has a braindamaged uname.
++#
++# We need to work around FreeBSD 1.1.5.1 
++(
++XREL=`uname -X 2>/dev/null | grep "^Release" | awk '{print $3}'`
++if [ "x$XREL" != "x" ]; then
++    if [ -f /etc/kconfig ]; then
++	case "$XREL" in
++	    4.0|4.1)
++		    echo "${MACHINE}-whatever-isc4"; exit 0
++		;;
++	esac
++    else
++	case "$XREL" in
++	    3.2v4.2)
++		echo "whatever-whatever-sco3"; exit 0
++		;;
++	    3.2v5.0*)
++		echo "whatever-whatever-sco5"; exit 0
++		;;
++	    4.2MP)
++		case "x${VERSION}" in
++		    x2.0*) echo "whatever-whatever-unixware20"; exit 0 ;;
++		    x2.1*) echo "whatever-whatever-unixware21"; exit 0 ;;
++		    x2*)   echo "whatever-whatever-unixware2";  exit 0 ;;
++		esac
++		;;
++	    4.2)
++		echo "whatever-whatever-unixware1"; exit 0
++		;;
++	    5*)
++		case "x${VERSION}" in
++		    # We hardcode i586 in place of ${MACHINE} for the
++		    # following reason. The catch is that even though Pentium
++		    # is minimum requirement for platforms in question,
++		    # ${MACHINE} gets always assigned to i386. Now, problem
++		    # with i386 is that it makes ./config pass 386 to
++		    # ./Configure, which in turn makes make generate
++		    # inefficient SHA-1 (for this moment) code.
++		    x[678]*)  echo "i586-sco-unixware7"; exit 0 ;;
++		esac
++		;;
++	esac
++    fi
++fi
++# Now we simply scan though... In most cases, the SYSTEM info is enough
++#
++case "${SYSTEM}:${RELEASE}:${VERSION}:${MACHINE}" in
++    MPE/iX:*)
++	MACHINE=`echo "$MACHINE" | sed -e 's/-/_/g'`
++	echo "parisc-hp-MPE/iX"; exit 0
++	;;
++    A/UX:*)
++	echo "m68k-apple-aux3"; exit 0
++	;;
++
++    AIX:[3-9]:4:*)
++	echo "${MACHINE}-ibm-aix"; exit 0
++	;;
++
++    AIX:*:[5-9]:*)
++	echo "${MACHINE}-ibm-aix"; exit 0
++	;;
++
++    AIX:*)
++	echo "${MACHINE}-ibm-aix3"; exit 0
++	;;
++
++    dgux:*)
++	echo "${MACHINE}-dg-dgux"; exit 0
++	;;
++
++    HI-UX:*)
++	echo "${MACHINE}-hi-hiux"; exit 0
++	;;
++
++    HP-UX:*)
++	HPUXVER=`echo ${RELEASE}|sed -e 's/[^.]*.[0B]*//'`
++	case "$HPUXVER" in
++	    1[0-9].*)	# HPUX 10 and 11 targets are unified
++		echo "${MACHINE}-hp-hpux1x"; exit 0
++		;;
++	    *)
++		echo "${MACHINE}-hp-hpux"; exit 0
++		;;
++	esac
++	;;
++
++    IRIX:5.*)
++	echo "mips2-sgi-irix"; exit 0
++	;;
++
++    IRIX:6.*)
++	echo "mips3-sgi-irix"; exit 0
++	;;
++
++    IRIX64:*)
++	echo "mips4-sgi-irix64"; exit 0
++	;;
++
++    Linux:[2-9].*)
++	echo "${MACHINE}-whatever-linux2"; exit 0
++	;;
++
++    Linux:1.*)
++	echo "${MACHINE}-whatever-linux1"; exit 0
++	;;
++
++    GNU*)
++	echo "hurd-x86"; exit 0;
++	;;
++
++    LynxOS:*)
++	echo "${MACHINE}-lynx-lynxos"; exit 0
++	;;
++
++    BSD/OS:4.*)  # BSD/OS always says 386
++	echo "i486-whatever-bsdi4"; exit 0
++	;;
++
++    BSD/386:*:*:*486*|BSD/OS:*:*:*:*486*)
++        case `/sbin/sysctl -n hw.model` in
++	    Pentium*)
++                echo "i586-whatever-bsdi"; exit 0
++                ;;
++            *)
++                echo "i386-whatever-bsdi"; exit 0
++                ;;
++            esac;
++	;;
++
++    BSD/386:*|BSD/OS:*)
++	echo "${MACHINE}-whatever-bsdi"; exit 0
++	;;
++
++    FreeBSD:*:*:*386*)
++        VERS=`echo ${RELEASE} | sed -e 's/[-(].*//'`
++        MACH=`sysctl -n hw.model`
++        ARCH='whatever'
++        case ${MACH} in
++           *386*       ) MACH="i386"     ;;
++           *486*       ) MACH="i486"     ;;
++           Pentium\ II*) MACH="i686"     ;;
++           Pentium*    ) MACH="i586"     ;;
++           *           ) MACH="$MACHINE" ;;
++        esac
++        case ${MACH} in
++           i[0-9]86 ) ARCH="pc" ;;
++        esac
++        echo "${MACH}-${ARCH}-freebsd${VERS}"; exit 0
++        ;;
++
++    FreeBSD:*)
++	echo "${MACHINE}-whatever-freebsd"; exit 0
++	;;
++
++    NetBSD:*:*:*386*)
++        echo "`(/usr/sbin/sysctl -n hw.model || /sbin/sysctl -n hw.model) | sed 's,.*\(.\)86-class.*,i\186,'`-whatever-netbsd"; exit 0
++	;;
++
++    NetBSD:*)
++	echo "${MACHINE}-whatever-netbsd"; exit 0
++	;;
++
++    OpenBSD:*)
++	echo "${MACHINE}-whatever-openbsd"; exit 0
++	;;
++
++    OpenUNIX:*)
++	echo "${MACHINE}-unknown-OpenUNIX${VERSION}"; exit 0
++	;;
++
++    OSF1:*:*:*alpha*)
++	OSFMAJOR=`echo ${RELEASE}| sed -e 's/^V\([0-9]*\)\..*$/\1/'`
++	case "$OSFMAJOR" in
++	    4|5)
++		echo "${MACHINE}-dec-tru64"; exit 0
++		;;
++	    1|2|3)
++		echo "${MACHINE}-dec-osf"; exit 0
++		;;
++	    *)
++		echo "${MACHINE}-dec-osf"; exit 0
++		;;
++	esac
++	;;
++
++    QNX:*)
++	case "$RELEASE" in
++	    4*)
++		echo "${MACHINE}-whatever-qnx4"
++		;;
++	    6*)
++		echo "${MACHINE}-whatever-qnx6"
++		;;
++	    *)
++		echo "${MACHINE}-whatever-qnx"
++		;;
++	esac
++	exit 0
++	;;
++
++    Paragon*:*:*:*)
++	echo "i860-intel-osf1"; exit 0
++	;;
++
++    Rhapsody:*)
++	echo "ppc-apple-rhapsody"; exit 0
++	;;
++
++    Darwin:*)
++	case "$MACHINE" in
++	    Power*)
++		echo "ppc-apple-darwin${VERSION}"
++		;;
++	    *)
++		echo "i386-apple-darwin${VERSION}"
++		;;
++	esac
++	exit 0
++	;;
++
++    SunOS:5.*)
++	echo "${MACHINE}-whatever-solaris2"; exit 0
++	;;
++
++    SunOS:*)
++	echo "${MACHINE}-sun-sunos4"; exit 0
++	;;
++
++    UNIX_System_V:4.*:*)
++	echo "${MACHINE}-whatever-sysv4"; exit 0
++	;;
++
++    VOS:*:*:i786)
++     echo "i386-stratus-vos"; exit 0
++     ;;
++
++    VOS:*:*:*)
++     echo "hppa1.1-stratus-vos"; exit 0
++     ;;
++
++    *:4*:R4*:m88k)
++	echo "${MACHINE}-whatever-sysv4"; exit 0
++	;;
++
++    DYNIX/ptx:4*:*)
++	echo "${MACHINE}-whatever-sysv4"; exit 0
++	;;
++
++    *:4.0:3.0:3[34]?? | *:4.0:3.0:3[34]??,*)
++	echo "i486-ncr-sysv4"; exit 0
++	;;
++
++    ULTRIX:*)
++	echo "${MACHINE}-unknown-ultrix"; exit 0
++	;;
++
++    SINIX*|ReliantUNIX*)
++	echo "${MACHINE}-siemens-sysv4"; exit 0
++	;;
++
++    POSIX-BC*)
++	echo "${MACHINE}-siemens-sysv4"; exit 0   # Here, $MACHINE == "BS2000"
++	;;
++
++    machten:*)
++       echo "${MACHINE}-tenon-${SYSTEM}"; exit 0;
++       ;;
++
++    library:*)
++	echo "${MACHINE}-ncr-sysv4"; exit 0
++	;;
++
++    ConvexOS:*:11.0:*)
++	echo "${MACHINE}-v11-${SYSTEM}"; exit 0;
++	;;
++
++    NEWS-OS:4.*)
++	echo "mips-sony-newsos4"; exit 0;
++	;;
++
++    MINGW*)
++	echo "${MACHINE}-whatever-mingw"; exit 0;
++	;;
++    CYGWIN*)
++	case "$RELEASE" in
++	    [bB]*|1.0|1.[12].*)
++		echo "${MACHINE}-whatever-cygwin_pre1.3"
++		;;
++	    *)
++		echo "${MACHINE}-whatever-cygwin"
++		;;
++	esac
++	exit 0
++	;;
++
++    *"CRAY T3E")
++       echo "t3e-cray-unicosmk"; exit 0;
++       ;;
++
++    *CRAY*)
++       echo "j90-cray-unicos"; exit 0;
++       ;;
++
++    NONSTOP_KERNEL*)
++       echo "nsr-tandem-nsk"; exit 0;
++       ;;
++esac
++
++#
++# Ugg. These are all we can determine by what we know about
++# the output of uname. Be more creative:
++#
++
++# Do the Apollo stuff first. Here, we just simply assume
++# that the existance of the /usr/apollo directory is proof
++# enough
++if [ -d /usr/apollo ]; then
++    echo "whatever-apollo-whatever"
++    exit 0
++fi
++
++# Now NeXT
++ISNEXT=`hostinfo 2>/dev/null`
++case "$ISNEXT" in
++    *'NeXT Mach 3.3'*)
++	echo "whatever-next-nextstep3.3"; exit 0
++	;;
++    *NeXT*)
++	echo "whatever-next-nextstep"; exit 0
++	;;
++esac
++
++# At this point we gone through all the one's
++# we know of: Punt
++
++echo "${MACHINE}-whatever-${SYSTEM}" 
++exit 0
++) 2>/dev/null | (
++
++# ---------------------------------------------------------------------------
++# this is where the translation occurs into SSLeay terms
++# ---------------------------------------------------------------------------
++
++GCCVER=`(gcc -dumpversion) 2>/dev/null`
++if [ "$GCCVER" != "" ]; then
++  # then strip off whatever prefix egcs prepends the number with...
++  # Hopefully, this will work for any future prefixes as well.
++  GCCVER=`echo $GCCVER | LC_ALL=C sed 's/^[a-zA-Z]*\-//'`
++  # Since gcc 3.1 gcc --version behaviour has changed.  gcc -dumpversion
++  # does give us what we want though, so we use that.  We just just the
++  # major and minor version numbers.
++  # peak single digit before and after first dot, e.g. 2.95.1 gives 29
++  GCCVER=`echo $GCCVER | sed 's/\([0-9]\)\.\([0-9]\).*/\1\2/'`
++fi
++
++# Only set CC if not supplied already
++if [ -z "$CC" ]; then
++# figure out if gcc is available and if so we use it otherwise
++# we fallback to whatever cc does on the system
++  if [ "$GCCVER" != "" ]; then
++    CC=gcc
++  else
++    CC=cc
++  fi
++fi
++GCCVER=${GCCVER:-0}
++if [ "$SYSTEM" = "HP-UX" ];then
++  # By default gcc is a ILP32 compiler (with long long == 64).
++  GCC_BITS="32"
++  if [ $GCCVER -ge 30 ]; then
++    # PA64 support only came in with gcc 3.0.x.
++    # We check if the preprocessor symbol __LP64__ is defined...
++    if echo "__LP64__" | gcc -v -E -x c - 2>/dev/null | grep "^__LP64__" 2>&1 > /dev/null; then
++      : # __LP64__ has slipped through, it therefore is not defined
++    else
++      GCC_BITS="64"
++    fi
++  fi
++fi
++if [ "$SYSTEM" = "SunOS" ]; then
++  if [ $GCCVER -ge 30 ]; then
++    # 64-bit ABI isn't officially supported in gcc 3.0, but it appears
++    # to be working, at the very least 'make test' passes...
++    if gcc -v -E -x c /dev/null 2>&1 | grep __arch64__ > /dev/null; then
++      GCC_ARCH="-m64"
++    else
++      GCC_ARCH="-m32"
++    fi
++  fi
++  # check for WorkShop C, expected output is "cc: blah-blah C x.x"
++  CCVER=`(cc -V 2>&1) 2>/dev/null | \
++  	egrep -e '^cc: .* C [0-9]\.[0-9]' | \
++	sed 's/.* C \([0-9]\)\.\([0-9]\).*/\1\2/'`
++  CCVER=${CCVER:-0}
++  if [ $MACHINE != i86pc -a $CCVER -gt 40 ]; then
++    CC=cc	# overrides gcc!!!
++    if [ $CCVER -eq 50 ]; then
++      echo "WARNING! Detected WorkShop C 5.0. Do make sure you have"
++      echo "         patch #107357-01 or later applied."
++      sleep 5
++    fi
++  fi
++fi
++
++if [ "${SYSTEM}-${MACHINE}" = "Linux-alpha" ]; then
++  # check for Compaq C, expected output is "blah-blah C Vx.x"
++  CCCVER=`(ccc -V 2>&1) 2>/dev/null | \
++	egrep -e '.* C V[0-9]\.[0-9]' | \
++	sed 's/.* C V\([0-9]\)\.\([0-9]\).*/\1\2/'`
++  CCCVER=${CCCVER:-0}
++  if [ $CCCVER -gt 60 ]; then
++    CC=ccc	# overrides gcc!!! well, ccc outperforms inoticeably
++		# only on hash routines and des, otherwise gcc (2.95)
++		# keeps along rather tight...
++  fi
++fi
++
++if [ "${SYSTEM}" = "AIX" ]; then	# favor vendor cc over gcc
++    (cc) 2>&1 | grep -iv "not found" > /dev/null && CC=cc
++fi
++
++CCVER=${CCVER:-0}
++
++# read the output of the embedded GuessOS 
++read GUESSOS
++
++echo Operating system: $GUESSOS
++
++# now map the output into SSLeay terms ... really should hack into the
++# script above so we end up with values in vars but that would take
++# more time that I want to waste at the moment
++case "$GUESSOS" in
++  mips2-sgi-irix)
++	CPU=`(hinv -t cpu) 2>/dev/null | head -1 | sed 's/^CPU:[^R]*R\([0-9]*\).*/\1/'`
++	CPU=${CPU:-0}
++	if [ $CPU -ge 4000 ]; then
++		options="$options -mips2"
++	fi
++	OUT="irix-$CC"
++	;;
++  mips3-sgi-irix)
++	#CPU=`(hinv -t cpu) 2>/dev/null | head -1 | sed 's/^CPU:[^R]*R\([0-9]*\).*/\1/'`
++	#CPU=${CPU:-0}
++	#if [ $CPU -ge 5000 ]; then
++	#	options="$options -mips4"
++	#else
++	#	options="$options -mips3"
++	#fi
++	OUT="irix-mips3-$CC"
++	;;
++  mips4-sgi-irix64)
++	echo "WARNING! If you wish to build 64-bit library, then you have to"
++	echo "         invoke './Configure irix64-mips4-$CC' *manually*."
++	if [ "$TEST" = "false" -a -t 1 ]; then
++	  echo "         You have about 5 seconds to press Ctrl-C to abort."
++	  (trap "stty `stty -g`" 2 0; stty -icanon min 0 time 50; read waste) <&1
++	fi
++        #CPU=`(hinv -t cpu) 2>/dev/null | head -1 | sed 's/^CPU:[^R]*R\([0-9]*\).*/\1/'`
++        #CPU=${CPU:-0}
++        #if [ $CPU -ge 5000 ]; then
++        #        options="$options -mips4"
++        #else
++        #        options="$options -mips3"
++        #fi
++	OUT="irix-mips3-$CC"
++	;;
++  ppc-apple-rhapsody) OUT="rhapsody-ppc-cc" ;;
++  ppc-apple-darwin*) OUT="darwin-ppc-cc" ;;
++  i386-apple-darwin*) OUT="darwin-i386-cc" ;;
++  alpha-*-linux2)
++        ISA=`awk '/cpu model/{print$4;exit(0);}' /proc/cpuinfo`
++	case ${ISA:-generic} in
++	*[678])	OUT="linux-alpha+bwx-$CC" ;;
++	*)	OUT="linux-alpha-$CC" ;;
++	esac
++	if [ "$CC" = "gcc" ]; then
++	    case ${ISA:-generic} in
++	    EV5|EV45)		options="$options -mcpu=ev5";;
++	    EV56|PCA56)		options="$options -mcpu=ev56";;
++	    *)			options="$options -mcpu=ev6";;
++	    esac
++	fi
++	;;
++  ppc64-*-linux2)
++	echo "WARNING! If you wish to build 64-bit library, then you have to"
++	echo "         invoke './Configure linux-ppc64' *manually*."
++	if [ "$TEST" = "false" -a -t 1 ]; then
++	    echo "         You have about 5 seconds to press Ctrl-C to abort."
++	    (trap "stty `stty -g`" 2 0; stty -icanon min 0 time 50; read waste) <&1
++	fi
++	OUT="linux-ppc"
++	;;
++  ppc-*-linux2) OUT="linux-ppc" ;;
++  ia64-*-linux?) OUT="linux-ia64" ;;
++  sparc64-*-linux2)
++	echo "WARNING! If you *know* that your GNU C supports 64-bit/V9 ABI"
++	echo "         and wish to build 64-bit library, then you have to"
++	echo "         invoke './Configure linux64-sparcv9' *manually*."
++	if [ "$TEST" = "false" -a -t 1 ]; then
++	  echo "          You have about 5 seconds to press Ctrl-C to abort."
++	  (trap "stty `stty -g`" 2 0; stty -icanon min 0 time 50; read waste) <&1
++	fi
++	OUT="linux-sparcv9" ;;
++  sparc-*-linux2)
++	KARCH=`awk '/^type/{print$3;exit(0);}' /proc/cpuinfo`
++	case ${KARCH:-sun4} in
++	sun4u*)	OUT="linux-sparcv9" ;;
++	sun4m)	OUT="linux-sparcv8" ;;
++	sun4d)	OUT="linux-sparcv8" ;;
++	*)	OUT="linux-generic32"; options="$options -DB_ENDIAN" ;;
++	esac ;;
++  parisc*-*-linux2)
++	# 64-bit builds under parisc64 linux are not supported and
++	# compiler is expected to generate 32-bit objects...
++	CPUARCH=`awk '/cpu family/{print substr($5,1,3); exit(0);}' /proc/cpuinfo`
++	CPUSCHEDULE=`awk '/^cpu.[ 	]*: PA/{print substr($3,3); exit(0);}' /proc/cpuinfo`
++
++	# ??TODO ??  Model transformations
++	# 0. CPU Architecture for the 1.1 processor has letter suffixes. We strip that off
++	#    assuming no further arch. identification will ever be used by GCC.
++	# 1. I'm most concerned about whether is a 7300LC is closer to a 7100 versus a 7100LC.
++	# 2. The variant 64-bit processors cause concern should GCC support explicit schedulers
++	#    for these chips in the future.
++	#         PA7300LC -> 7100LC (1.1)
++	#         PA8200   -> 8000   (2.0)
++	#         PA8500   -> 8000   (2.0)
++	#         PA8600   -> 8000   (2.0)
++
++	CPUSCHEDULE=`echo $CPUSCHEDULE|sed -e 's/7300LC/7100LC/' -e 's/8.00/8000/'`
++	# Finish Model transformations
++
++	options="$options -DB_ENDIAN -mschedule=$CPUSCHEDULE -march=$CPUARCH"
++	OUT="linux-generic32" ;;
++  arm*b-*-linux2) OUT="linux-generic32"; options="$options -DB_ENDIAN" ;;
++  arm*l-*-linux2) OUT="linux-generic32"; options="$options -DL_ENDIAN" ;;
++  sh*b-*-linux2) OUT="linux-generic32"; options="$options -DB_ENDIAN" ;;
++  sh*-*-linux2)  OUT="linux-generic32"; options="$options -DL_ENDIAN" ;;
++  m68k*-*-linux2) OUT="linux-generic32"; options="$options -DB_ENDIAN" ;;
++  s390-*-linux2) OUT="linux-generic32"; options="$options -DB_ENDIAN -DNO_ASM" ;;
++  s390x-*-linux2) OUT="linux-generic64"; options="$options -DB_ENDIAN" ;;
++  x86_64-*-linux?) OUT="linux-x86_64" ;;
++  *86-*-linux2) OUT="linux-elf"
++	if [ "$GCCVER" -gt 28 ]; then
++          if grep '^model.*Pentium' /proc/cpuinfo >/dev/null ; then
++	    options="$options -march=pentium"
++          fi
++          if grep '^model.*Pentium Pro' /proc/cpuinfo >/dev/null ; then
++	    options="$options -march=pentiumpro"
++          fi
++          if grep '^model.*K6' /proc/cpuinfo >/dev/null ; then
++	    options="$options -march=k6"
++          fi
++        fi ;;
++  *-*-linux1) OUT="linux-aout" ;;
++  *-*-linux2) OUT="linux-generic32" ;;
++  sun4[uv]*-*-solaris2)
++	OUT="solaris-sparcv9-$CC"
++	ISA64=`(isalist) 2>/dev/null | grep sparcv9`
++	if [ "$ISA64" != "" ]; then
++	    if [ "$CC" = "cc" -a $CCVER -ge 50 ]; then
++		echo "WARNING! If you wish to build 64-bit library, then you have to"
++		echo "         invoke './Configure solaris64-sparcv9-cc' *manually*."
++		if [ "$TEST" = "false" -a -t 1 ]; then
++		  echo "         You have about 5 seconds to press Ctrl-C to abort."
++		  (trap "stty `stty -g`" 2 0; stty -icanon min 0 time 50; read waste) <&1
++		fi
++	    elif [ "$CC" = "gcc" -a "$GCC_ARCH" = "-m64" ]; then
++		# $GCC_ARCH denotes default ABI chosen by compiler driver
++		# (first one found on the $PATH). I assume that user
++		# expects certain consistency with the rest of his builds
++		# and therefore switch over to 64-bit. <appro>
++		OUT="solaris64-sparcv9-gcc"
++		echo "WARNING! If you wish to build 32-bit library, then you have to"
++		echo "         invoke './Configure solaris-sparcv9-gcc' *manually*."
++		if [ "$TEST" = "false" -a -t 1 ]; then
++		  echo "         You have about 5 seconds to press Ctrl-C to abort."
++		  (trap "stty `stty -g`" 2 0; stty -icanon min 0 time 50; read waste) <&1
++		fi
++	    elif [ "$GCC_ARCH" = "-m32" ]; then
++		echo "NOTICE! If you *know* that your GNU C supports 64-bit/V9 ABI"
++		echo "        and wish to build 64-bit library, then you have to"
++		echo "        invoke './Configure solaris64-sparcv9-gcc' *manually*."
++		if [ "$TEST" = "false" -a -t 1 ]; then
++		  echo "         You have about 5 seconds to press Ctrl-C to abort."
++		  (trap "stty `stty -g`" 2 0; stty -icanon min 0 time 50; read waste) <&1
++		fi
++	    fi
++	fi
++	;;
++  sun4m-*-solaris2)	OUT="solaris-sparcv8-$CC" ;;
++  sun4d-*-solaris2)	OUT="solaris-sparcv8-$CC" ;;
++  sun4*-*-solaris2)	OUT="solaris-sparcv7-$CC" ;;
++  *86*-*-solaris2)
++	ISA64=`(isalist) 2>/dev/null | grep amd64`
++	if [ "$ISA64" != "" ]; then
++	    OUT="solaris64-x86_64-$CC"
++	else
++	    OUT="solaris-x86-$CC"
++	    if [ `uname -r | sed -e 's/5\.//'` -lt 10 ]; then
++		options="$options no-sse2"
++	    fi
++	fi
++	;;
++  *-*-sunos4)		OUT="sunos-$CC" ;;
++
++  *86*-*-bsdi4)		OUT="BSD-x86-elf"; options="$options no-sse2 -ldl" ;;
++  alpha*-*-*bsd*)	OUT="BSD-generic64"; options="$options -DL_ENDIAN" ;;
++  powerpc64-*-*bsd*)	OUT="BSD-generic64"; options="$options -DB_ENDIAN" ;;
++  sparc64-*-*bsd*)	OUT="BSD-sparc64" ;;
++  ia64-*-*bsd*)		OUT="BSD-ia64" ;;
++  amd64-*-*bsd*)	OUT="BSD-x86_64" ;;
++  *86*-*-*bsd*)		# mimic ld behaviour when it's looking for libc...
++			if [ -L /usr/lib/libc.so ]; then	# [Free|Net]BSD
++			    libc=/usr/lib/libc.so
++			else					# OpenBSD
++			    # ld searches for highest libc.so.* and so do we
++			    libc=`(ls /usr/lib/libc.so.* | tail -1) 2>/dev/null`
++			fi
++			case "`(file -L $libc) 2>/dev/null`" in
++			*ELF*)	OUT="BSD-x86-elf" ;;
++			*)	OUT="BSD-x86"; options="$options no-sse2" ;;
++			esac ;;
++  *-*-*bsd*)		OUT="BSD-generic32" ;;
++
++  *-*-osf)		OUT="osf1-alpha-cc" ;;
++  *-*-tru64)		OUT="tru64-alpha-cc" ;;
++  *-*-[Uu]nix[Ww]are7)
++	if [ "$CC" = "gcc" ]; then
++	  OUT="unixware-7-gcc" ; options="$options no-sse2"
++	else    
++	  OUT="unixware-7" ; options="$options no-sse2 -D__i386__"
++	fi
++	;;
++  *-*-[Uu]nix[Ww]are20*) OUT="unixware-2.0"; options="$options no-sse2 no-sha512" ;;
++  *-*-[Uu]nix[Ww]are21*) OUT="unixware-2.1"; options="$options no-sse2 no-sha512" ;;
++  *-*-vos)
++	options="$options no-threads no-shared no-asm no-dso"
++	EXE=".pm"
++	OUT="vos-$CC" ;;
++  BS2000-siemens-sysv4) OUT="BS2000-OSD" ;;
++  RM*-siemens-sysv4) OUT="ReliantUNIX" ;;
++  *-siemens-sysv4) OUT="SINIX" ;;
++  *-hpux1*)
++	if [ $CC = "gcc" -a $GCC_BITS = "64" ]; then
++	    OUT="hpux64-parisc2-gcc"
++	fi
++	KERNEL_BITS=`(getconf KERNEL_BITS) 2>/dev/null`
++	KERNEL_BITS=${KERNEL_BITS:-32}
++	CPU_VERSION=`(getconf CPU_VERSION) 2>/dev/null`
++	CPU_VERSION=${CPU_VERSION:-0}
++	# See <sys/unistd.h> for further info on CPU_VERSION.
++	if   [ $CPU_VERSION -ge 768 ]; then	# IA-64 CPU
++	     echo "WARNING! 64-bit ABI is the default configured ABI on HP-UXi."
++	     echo "         If you wish to build 32-bit library, the you have to"
++	     echo "         invoke './Configure hpux-ia64-cc' *manually*."
++	     if [ "$TEST" = "false" -a -t 1 ]; then
++		echo "         You have about 5 seconds to press Ctrl-C to abort."
++		(trap "stty `stty -g`" 2 0; stty -icanon min 0 time 50; read waste) <&1
++	     fi
++	     OUT="hpux64-ia64-cc"
++	elif [ $CPU_VERSION -ge 532 ]; then	# PA-RISC 2.x CPU
++	     OUT=${OUT:-"hpux-parisc2-${CC}"}
++	     if [ $KERNEL_BITS -eq 64 -a "$CC" = "cc" ]; then
++		echo "WARNING! If you wish to build 64-bit library then you have to"
++		echo "         invoke './Configure hpux64-parisc2-cc' *manually*."
++		if [ "$TEST" = "false" -a -t 1 ]; then
++		  echo "         You have about 5 seconds to press Ctrl-C to abort."
++		  (trap "stty `stty -g`" 2 0; stty -icanon min 0 time 50; read waste) <&1
++		fi
++	     fi
++	elif [ $CPU_VERSION -ge 528 ]; then	# PA-RISC 1.1+ CPU
++	     OUT="hpux-parisc-${CC}"
++	elif [ $CPU_VERSION -ge 523 ]; then	# PA-RISC 1.0 CPU
++	     OUT="hpux-parisc-${CC}"
++	else					# Motorola(?) CPU
++	     OUT="hpux-$CC"
++	fi
++	options="$options -D_REENTRANT" ;;
++  *-hpux)	OUT="hpux-parisc-$CC" ;;
++  *-aix)
++	KERNEL_BITS=`(getconf KERNEL_BITMODE) 2>/dev/null`
++	KERNEL_BITS=${KERNEL_BITS:-32}
++	OBJECT_MODE=${OBJECT_MODE:-32}
++	if [ "$CC" = "gcc" ]; then
++	    OUT="aix-gcc"
++	elif [ $OBJECT_MODE -eq 64 ]; then
++	    echo 'Your $OBJECT_MODE was found to be set to 64' 
++	    OUT="aix64-cc"
++	else
++	    OUT="aix-cc"
++	    if [ $KERNEL_BITS -eq 64 ]; then
++		echo "WARNING! If you wish to build 64-bit kit, then you have to"
++		echo "         invoke './Configure aix64-cc' *manually*."
++		if [ "$TEST" = "false" -a -t 1 ]; then
++		    echo "         You have ~5 seconds to press Ctrl-C to abort."
++		    (trap "stty `stty -g`" 2 0; stty -icanon min 0 time 50; read waste) <&1
++		fi
++	    fi
++	fi
++	if (lsattr -E -O -l `lsdev -c processor|awk '{print$1;exit}'` | grep -i powerpc) >/dev/null 2>&1; then
++	    :	# this applies even to Power3 and later, as they return PowerPC_POWER[345]
++	else
++	    options="$options no-asm"
++	fi
++	;;
++  # these are all covered by the catchall below
++  # *-dgux) OUT="dgux" ;;
++  mips-sony-newsos4) OUT="newsos4-gcc" ;;
++  *-*-cygwin_pre1.3) OUT="Cygwin-pre1.3" ;;
++  *-*-cygwin) OUT="Cygwin" ;;
++  t3e-cray-unicosmk) OUT="cray-t3e" ;;
++  j90-cray-unicos) OUT="cray-j90" ;;
++  nsr-tandem-nsk) OUT="tandem-c89" ;;
++  *) OUT=`echo $GUESSOS | awk -F- '{print $3}'`;;
++esac
++
++# NB: This atalla support has been superceded by the ENGINE support
++# That contains its own header and definitions anyway. Support can
++# be enabled or disabled on any supported platform without external
++# headers, eg. by adding the "hw-atalla" switch to ./config or
++# perl Configure
++#
++# See whether we can compile Atalla support
++#if [ -f /usr/include/atasi.h ]
++#then
++#  options="$options -DATALLA"
++#fi
++
++# gcc < 2.8 does not support -march=ultrasparc
++if [ "$OUT" = solaris-sparcv9-gcc -a $GCCVER -lt 28 ]
++then
++  echo "WARNING! Falling down to 'solaris-sparcv8-gcc'."
++  echo "         Upgrade to gcc-2.8 or later."
++  sleep 5
++  OUT=solaris-sparcv8-gcc
++fi
++if [ "$OUT" = "linux-sparcv9" -a $GCCVER -lt 28 ]
++then
++  echo "WARNING! Falling down to 'linux-sparcv8'."
++  echo "         Upgrade to gcc-2.8 or later."
++  sleep 5
++  OUT=linux-sparcv8
++fi
++
++case "$GUESSOS" in
++  i386-*) options="$options 386" ;;
++esac
++
++for i in aes bf camellia cast des dh dsa ec hmac idea md2 md5 mdc2 rc2 rc4 rc5 ripemd rsa seed sha
++do
++  if [ ! -d crypto/$i ]
++  then
++    options="$options no-$i"
++  fi
++done
++
++# Discover Kerberos 5 (since it's still a prototype, we don't
++# do any guesses yet, that's why this section is commented away.
++#if [ -d /usr/kerberos ]; then
++#    krb5_dir=/usr/kerberos
++#    if [ \( -f $krb5_dir/lib/libgssapi_krb5.a -o -f $krb5_dir/lib/libgssapi_krb5.so* \)\
++#	-a \( -f $krb5_dir/lib/libkrb5.a -o -f $krb5_dir/lib/libkrb5.so* \)\
++#	-a \( -f $krb5_dir/lib/libcom_err.a -o -f $krb5_dir/lib/libcom_err.so* \)\
++#	-a \( -f $krb5_dir/lib/libk5crypto.a -o -f $krb5_dir/lib/libk5crypto.so* \)\
++#	-a \( -f $krb5_dir/include/krb5.h \) ]; then
++#	options="$options --with-krb5-flavor=MIT"
++#    fi
++#elif [ -d /usr/heimdal ]; then
++#    krb5_dir=/usr/heimdal
++#    if [ \( -f $krb5_dir/lib/libgssapi.a -o -f $krb5_dir/lib/libgssapi.so* \)\
++#	-a \( -f $krb5_dir/lib/libkrb5.a -o -f $krb5_dir/lib/libkrb5.so* \)\
++#	-a \( -f $krb5_dir/lib/libcom_err.a -o -f $krb5_dir/lib/libcom_err.so* \)\
++#	-a \( -f $krb5_dir/include/krb5.h \) ]; then
++#	options="$options --with-krb5-flavor=Heimdal"
++#    fi
++#fi
++
++if [ -z "$OUT" ]; then
++  OUT="$CC"
++fi
++
++if [ ".$PERL" = . ] ; then
++	for i in . `echo $PATH | sed 's/:/ /g'`; do
++		if [ -f "$i/perl5$EXE" ] ; then
++			PERL="$i/perl5$EXE"
++			break;
++		fi;
++	done
++fi
++
++if [ ".$PERL" = . ] ; then
++	for i in . `echo $PATH | sed 's/:/ /g'`; do
++		if [ -f "$i/perl$EXE" ] ; then
++			if "$i/perl$EXE" -e 'exit($]<5.0)'; then
++				PERL="$i/perl$EXE"
++				break;
++			fi;
++		fi;
++	done
++fi
++
++if [ ".$PERL" = . ] ; then
++	echo "You need Perl 5."
++	exit 1
++fi
++
++# run Configure to check to see if we need to specify the 
++# compiler for the platform ... in which case we add it on
++# the end ... otherwise we leave it off
++
++$PERL ./Configure LIST | grep "$OUT-$CC" > /dev/null
++if [ $? = "0" ]; then
++  OUT="$OUT-$CC"
++fi
++
++OUT="$PREFIX$OUT"
++
++$PERL ./Configure LIST | grep "$OUT" > /dev/null
++if [ $? = "0" ]; then
++  echo Configuring for $OUT
++
++  if [ "$TEST" = "true" ]; then
++    echo $PERL ./Configure $OUT $options
++  else
++    $PERL ./Configure $OUT $options
++  fi
++else
++  echo "This system ($OUT) is not supported. See file INSTALL for details."
++fi
++)
+diff -Nru openssl-0.9.8l_a/Configure openssl-0.9.8l_b/Configure
+--- openssl-0.9.8l_a/Configure	2009-11-05 14:07:06.000000000 +0200
++++ openssl-0.9.8l_b/Configure	2009-12-08 17:44:45.000000000 +0200
+@@ -36,6 +36,8 @@
+ #		(Default: KRB5_DIR/include)
+ # --with-krb5-flavor  Declare what flavor of Kerberos 5 is used.  Currently
+ #		supported values are "MIT" and "Heimdal".  A value is required.
++# --with-cryptodev Force support for cryptodev (ie., ocf-linux)
++# --with-cryptodev-digests Force support for cryptodev digests (generally slow)
+ #
+ # --test-sanity Make a number of sanity checks on the data in this file.
+ #               This is a debugging tool for OpenSSL developers.
+@@ -545,6 +547,9 @@
+ ##### Compaq Non-Stop Kernel (Tandem)
+ "tandem-c89","c89:-Ww -D__TANDEM -D_XOPEN_SOURCE -D_XOPEN_SOURCE_EXTENDED=1 -D_TANDEM_SOURCE -DB_ENDIAN::(unknown):::THIRTY_TWO_BIT:::",
+ 
++# uClinux
++"uClinux-dist","$ENV{'CC'}:\$(CFLAGS)::-D_REENTRANT::\$(LDFLAGS) \$(LDLIBS):BN_LLONG::::::::::::\$(LIBSSL_dlfcn):linux-shared:-fPIC:-shared:.so.\$(SHLIB_MAJOR).\$(SHLIB_MINOR):$ENV{'RANLIB'}",
++
+ );
+ 
+ my @MK1MF_Builds=qw(VC-WIN64I VC-WIN64A
+@@ -599,6 +604,8 @@
+ my $no_asm=0;
+ my $no_dso=0;
+ my $no_gmp=0;
++my $have_cryptodev=0;
++my $use_cryptodev_digests=0;
+ my @skip=();
+ my $Makefile="Makefile";
+ my $des_locl="crypto/des/des_locl.h";
+@@ -747,6 +754,14 @@
+ 			{
+ 			exit(&test_sanity());
+ 			}
++		elsif (/^--with-cryptodev$/)
++			{
++				$have_cryptodev = 1;
++			}
++		elsif (/^--with-cryptodev-digests$/)
++			{
++				$use_cryptodev_digests = 1;
++			}
+ 		elsif (/^reconfigure/ || /^reconf/)
+ 			{
+ 			if (open(IN,"<$Makefile"))
+@@ -1035,6 +1050,7 @@
+ 			print " OPENSSL_NO_$ALGO";
+ 		
+ 			if (/^err$/)	{ $flags .= "-DOPENSSL_NO_ERR "; }
++			elsif (/^hw$/)	{ $flags .= "-DOPENSSL_NO_HW "; }
+ 			elsif (/^asm$/)	{ $no_asm = 1; }
+ 			}
+ 		else
+@@ -1159,6 +1175,16 @@
+ 		   $withargs{"krb5-dir"} ne "";
+ 	}
+ 
++# enable the linux cryptodev (ocf-linux) support
++if ($have_cryptodev)
++	{
++	if ($use_cryptodev_digests)
++		{
++		$cflags = "-DUSE_CRYPTODEV_DIGESTS $cflags";
++		}
++	$cflags = "-DHAVE_CRYPTODEV $cflags";
++	}
++
+ # The DSO code currently always implements all functions so that no
+ # applications will have to worry about that from a compilation point
+ # of view. However, the "method"s may return zero unless that platform
+diff -Nru openssl-0.9.8l_a/Configure.rej openssl-0.9.8l_b/Configure.rej
+--- openssl-0.9.8l_a/Configure.rej	2009-11-05 14:07:06.000000000 +0200
++++ openssl-0.9.8l_b/Configure.rej	1970-01-01 02:00:00.000000000 +0200
+@@ -1,16 +0,0 @@
+-***************
+-*** 162,167 ****
+-  "debug-ben-openbsd","gcc:-DBN_DEBUG -DREF_CHECK -DCONF_DEBUG -DBN_CTX_DEBUG -DCRYPTO_MDEBUG -DPEDANTIC -DDEBUG_SAFESTACK -DOPENSSL_OPENBSD_DEV_CRYPTO -DOPENSSL_NO_ASM -O2 -pedantic -Wall -Wshadow -Werror -pipe::(unknown)::::",
+-  "debug-ben-openbsd-debug","gcc:-DBN_DEBUG -DREF_CHECK -DCONF_DEBUG -DBN_CTX_DEBUG -DCRYPTO_MDEBUG -DPEDANTIC -DDEBUG_SAFESTACK -DOPENSSL_OPENBSD_DEV_CRYPTO -DOPENSSL_NO_ASM -g3 -O2 -pedantic -Wall -Wshadow -Werror -pipe::(unknown)::::",
+-  "debug-ben-debug",	"gcc:$gcc_devteam_warn -DBN_DEBUG -DREF_CHECK -DCONF_DEBUG  -DDEBUG_SAFESTACK -g3 -O2 -pipe::(unknown)::::::",
+-  "debug-ben-strict",	"gcc:-DBN_DEBUG -DREF_CHECK -DCONF_DEBUG -DBN_CTX_DEBUG -DCRYPTO_MDEBUG -DCONST_STRICT -O2 -Wall -Wshadow -Werror -Wpointer-arith -Wcast-qual -Wwrite-strings -pipe::(unknown)::::::",
+-  "debug-rse","cc:-DTERMIOS -DL_ENDIAN -pipe -O -g -ggdb3 -Wall::(unknown):::BN_LLONG ${x86_gcc_des} ${x86_gcc_opts}:${x86_elf_asm}",
+-  "debug-bodo",	"gcc:-DL_ENDIAN -DBN_DEBUG -DREF_CHECK -DCONF_DEBUG -DBIO_PAIR_DEBUG -DPEDANTIC -g -march=i486 -pedantic -Wshadow -Wall -Wcast-align -Wstrict-prototypes -Wmissing-prototypes -Wno-long-long -Wundef -Wconversion -pipe::-D_REENTRANT:::BN_LLONG ${x86_gcc_des} ${x86_gcc_opts}:${x86_elf_asm}",
+---- 162,168 ----
+-  "debug-ben-openbsd","gcc:-DBN_DEBUG -DREF_CHECK -DCONF_DEBUG -DBN_CTX_DEBUG -DCRYPTO_MDEBUG -DPEDANTIC -DDEBUG_SAFESTACK -DOPENSSL_OPENBSD_DEV_CRYPTO -DOPENSSL_NO_ASM -O2 -pedantic -Wall -Wshadow -Werror -pipe::(unknown)::::",
+-  "debug-ben-openbsd-debug","gcc:-DBN_DEBUG -DREF_CHECK -DCONF_DEBUG -DBN_CTX_DEBUG -DCRYPTO_MDEBUG -DPEDANTIC -DDEBUG_SAFESTACK -DOPENSSL_OPENBSD_DEV_CRYPTO -DOPENSSL_NO_ASM -g3 -O2 -pedantic -Wall -Wshadow -Werror -pipe::(unknown)::::",
+-  "debug-ben-debug",	"gcc:$gcc_devteam_warn -DBN_DEBUG -DREF_CHECK -DCONF_DEBUG  -DDEBUG_SAFESTACK -g3 -O2 -pipe::(unknown)::::::",
+-+ "debug-ben-no-renegotiation",	"gcc:$gcc_devteam_warn -DBN_DEBUG -DREF_CHECK -DCONF_DEBUG  -DDEBUG_SAFESTACK -DNO_RENEGOTIATION -g3 -O2 -pipe::(unknown)::::::",
+-  "debug-ben-strict",	"gcc:-DBN_DEBUG -DREF_CHECK -DCONF_DEBUG -DBN_CTX_DEBUG -DCRYPTO_MDEBUG -DCONST_STRICT -O2 -Wall -Wshadow -Werror -Wpointer-arith -Wcast-qual -Wwrite-strings -pipe::(unknown)::::::",
+-  "debug-rse","cc:-DTERMIOS -DL_ENDIAN -pipe -O -g -ggdb3 -Wall::(unknown):::BN_LLONG ${x86_gcc_des} ${x86_gcc_opts}:${x86_elf_asm}",
+-  "debug-bodo",	"gcc:-DL_ENDIAN -DBN_DEBUG -DREF_CHECK -DCONF_DEBUG -DBIO_PAIR_DEBUG -DPEDANTIC -g -march=i486 -pedantic -Wshadow -Wall -Wcast-align -Wstrict-prototypes -Wmissing-prototypes -Wno-long-long -Wundef -Wconversion -pipe::-D_REENTRANT:::BN_LLONG ${x86_gcc_des} ${x86_gcc_opts}:${x86_elf_asm}",
+diff -Nru openssl-0.9.8l_a/crypto/cryptlib.h openssl-0.9.8l_b/crypto/cryptlib.h
+--- openssl-0.9.8l_a/crypto/cryptlib.h	2008-06-06 18:52:31.000000000 +0300
++++ openssl-0.9.8l_b/crypto/cryptlib.h	2009-12-08 17:44:45.000000000 +0200
+@@ -62,7 +62,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ 
+-#include "e_os.h"
++#include <openssl/e_os.h>
+ 
+ #ifdef OPENSSL_USE_APPLINK
+ #define BIO_FLAGS_UPLINK 0x8000
+diff -Nru openssl-0.9.8l_a/crypto/engine/eng_all.c openssl-0.9.8l_b/crypto/engine/eng_all.c
+--- openssl-0.9.8l_a/crypto/engine/eng_all.c	2008-06-04 21:01:39.000000000 +0300
++++ openssl-0.9.8l_b/crypto/engine/eng_all.c	2009-12-08 17:44:45.000000000 +0200
+@@ -104,7 +104,7 @@
+ #endif
+ #endif
+ #ifndef OPENSSL_NO_HW
+-#if defined(__OpenBSD__) || defined(__FreeBSD__)
++#if defined(__OpenBSD__) || defined(__FreeBSD__) || defined(HAVE_CRYPTODEV)
+ 	ENGINE_load_cryptodev();
+ #endif
+ #if defined(OPENSSL_SYS_WIN32) && !defined(OPENSSL_NO_CAPIENG)
+@@ -113,7 +113,7 @@
+ #endif
+ 	}
+ 
+-#if defined(__OpenBSD__) || defined(__FreeBSD__)
++#if defined(__OpenBSD__) || defined(__FreeBSD__) || defined(HAVE_CRYPTODEV)
+ void ENGINE_setup_bsd_cryptodev(void) {
+ 	static int bsd_cryptodev_default_loaded = 0;
+ 	if (!bsd_cryptodev_default_loaded) {
+diff -Nru openssl-0.9.8l_a/crypto/engine/eng_cryptodev.c openssl-0.9.8l_b/crypto/engine/eng_cryptodev.c
+--- openssl-0.9.8l_a/crypto/engine/eng_cryptodev.c	2004-06-15 14:45:42.000000000 +0300
++++ openssl-0.9.8l_b/crypto/engine/eng_cryptodev.c	2009-12-08 17:44:45.000000000 +0200
+@@ -68,6 +68,16 @@
+ struct dev_crypto_state {
+ 	struct session_op d_sess;
+ 	int d_fd;
++
++#ifdef USE_CRYPTODEV_DIGESTS
++	char dummy_mac_key[20];
++
++	unsigned char digest_res[20];
++	char *mac_data;
++	int mac_len;
++
++	int copy;
++#endif
+ };
+ 
+ static u_int32_t cryptodev_asymfeat = 0;
+@@ -75,9 +85,11 @@
+ static int get_asym_dev_crypto(void);
+ static int open_dev_crypto(void);
+ static int get_dev_crypto(void);
++#if 0
+ static int cryptodev_max_iv(int cipher);
+ static int cryptodev_key_length_valid(int cipher, int len);
+ static int cipher_nid_to_cryptodev(int nid);
++#endif
+ static int get_cryptodev_ciphers(const int **cnids);
+ static int get_cryptodev_digests(const int **cnids);
+ static int cryptodev_usable_ciphers(const int **nids);
+@@ -100,7 +112,7 @@
+ static int cryptodev_bn_mod_exp(BIGNUM *r, const BIGNUM *a,
+     const BIGNUM *p, const BIGNUM *m, BN_CTX *ctx, BN_MONT_CTX *m_ctx);
+ static int cryptodev_rsa_nocrt_mod_exp(BIGNUM *r0, const BIGNUM *I,
+-    RSA *rsa);
++    RSA *rsa, BN_CTX *ctx);
+ static int cryptodev_rsa_mod_exp(BIGNUM *r0, const BIGNUM *I, RSA *rsa, BN_CTX *ctx);
+ static int cryptodev_dsa_bn_mod_exp(DSA *dsa, BIGNUM *r, BIGNUM *a,
+     const BIGNUM *p, const BIGNUM *m, BN_CTX *ctx, BN_MONT_CTX *m_ctx);
+@@ -130,9 +142,12 @@
+ 	int	ivmax;
+ 	int	keylen;
+ } ciphers[] = {
++	{ CRYPTO_ARC4,			NID_rc4,		0,	16, },
+ 	{ CRYPTO_DES_CBC,		NID_des_cbc,		8,	 8, },
+ 	{ CRYPTO_3DES_CBC,		NID_des_ede3_cbc,	8,	24, },
+ 	{ CRYPTO_AES_CBC,		NID_aes_128_cbc,	16,	16, },
++	{ CRYPTO_AES_CBC,		NID_aes_192_cbc,	16,	24, },
++	{ CRYPTO_AES_CBC,		NID_aes_256_cbc,	16,	32, },
+ 	{ CRYPTO_BLF_CBC,		NID_bf_cbc,		8,	16, },
+ 	{ CRYPTO_CAST_CBC,		NID_cast5_cbc,		8,	16, },
+ 	{ CRYPTO_SKIPJACK_CBC,		NID_undef,		0,	 0, },
+@@ -142,14 +157,15 @@
+ static struct {
+ 	int	id;
+ 	int	nid;
++	int 	keylen;
+ } digests[] = {
+-	{ CRYPTO_SHA1_HMAC,		NID_hmacWithSHA1,	},
+-	{ CRYPTO_RIPEMD160_HMAC,	NID_ripemd160,		},
+-	{ CRYPTO_MD5_KPDK,		NID_undef,		},
+-	{ CRYPTO_SHA1_KPDK,		NID_undef,		},
+-	{ CRYPTO_MD5,			NID_md5,		},
+-	{ CRYPTO_SHA1,			NID_undef,		},
+-	{ 0,				NID_undef,		},
++	{ CRYPTO_SHA1_HMAC,		NID_hmacWithSHA1,	20},
++	{ CRYPTO_RIPEMD160_HMAC,	NID_ripemd160,		16/*?*/},
++	{ CRYPTO_MD5_KPDK,		NID_undef,		0},
++	{ CRYPTO_SHA1_KPDK,		NID_undef,		0},
++	{ CRYPTO_MD5,			NID_md5,		16},
++	{ CRYPTO_SHA1,			NID_sha1,		20},
++	{ 0,				NID_undef,		0},
+ };
+ 
+ /*
+@@ -176,10 +192,17 @@
+ static int
+ get_dev_crypto(void)
+ {
+-	int fd, retfd;
++	static int fd = -1;
++	int retfd;
+ 
+-	if ((fd = open_dev_crypto()) == -1)
+-		return (-1);
++	if (fd == -1) {
++		if ((fd = open_dev_crypto()) == -1)
++			return (-1);
++		if (fcntl(fd, F_SETFD, 1) == -1) {
++			close(fd);
++			return (-1);
++		}
++	}
+ 	if (ioctl(fd, CRIOGET, &retfd) == -1)
+ 		return (-1);
+ 
+@@ -202,6 +225,7 @@
+ 	return fd;
+ }
+ 
++#if 0
+ /*
+  * XXXX this needs to be set for each alg - and determined from
+  * a running card.
+@@ -245,6 +269,7 @@
+ 			return (ciphers[i].id);
+ 	return (0);
+ }
++#endif
+ 
+ /*
+  * Find out what ciphers /dev/crypto will let us have a session for.
+@@ -264,7 +289,7 @@
+ 		return (0);
+ 	}
+ 	memset(&sess, 0, sizeof(sess));
+-	sess.key = (caddr_t)"123456781234567812345678";
++	sess.key = (caddr_t)"123456789abcdefghijklmno";
+ 
+ 	for (i = 0; ciphers[i].id && count < CRYPTO_ALGORITHM_MAX; i++) {
+ 		if (ciphers[i].nid == NID_undef)
+@@ -303,10 +328,12 @@
+ 		return (0);
+ 	}
+ 	memset(&sess, 0, sizeof(sess));
++	sess.mackey = (caddr_t)"123456789abcdefghijklmno";
+ 	for (i = 0; digests[i].id && count < CRYPTO_ALGORITHM_MAX; i++) {
+ 		if (digests[i].nid == NID_undef)
+ 			continue;
+ 		sess.mac = digests[i].id;
++		sess.mackeylen = digests[i].keylen;
+ 		sess.cipher = 0;
+ 		if (ioctl(fd, CIOCGSESSION, &sess) != -1 &&
+ 		    ioctl(fd, CIOCFSESSION, &sess.ses) != -1)
+@@ -351,6 +378,9 @@
+ static int
+ cryptodev_usable_digests(const int **nids)
+ {
++#ifdef USE_CRYPTODEV_DIGESTS
++	return (get_cryptodev_digests(nids));
++#else
+ 	/*
+ 	 * XXXX just disable all digests for now, because it sucks.
+ 	 * we need a better way to decide this - i.e. I may not
+@@ -365,6 +395,7 @@
+ 	 */
+ 	*nids = NULL;
+ 	return (0);
++#endif
+ }
+ 
+ static int
+@@ -427,16 +458,20 @@
+ {
+ 	struct dev_crypto_state *state = ctx->cipher_data;
+ 	struct session_op *sess = &state->d_sess;
+-	int cipher;
++	int cipher, i;
+ 
+-	if ((cipher = cipher_nid_to_cryptodev(ctx->cipher->nid)) == NID_undef)
+-		return (0);
+-
+-	if (ctx->cipher->iv_len > cryptodev_max_iv(cipher))
+-		return (0);
++	for (i = 0; ciphers[i].id; i++)
++		if (ctx->cipher->nid == ciphers[i].nid &&
++		    ctx->cipher->iv_len <= ciphers[i].ivmax &&
++		    ctx->key_len == ciphers[i].keylen) {
++			cipher = ciphers[i].id;
++			break;
++		}
+ 
+-	if (!cryptodev_key_length_valid(cipher, ctx->key_len))
++	if (!ciphers[i].id) {
++		state->d_fd = -1;
+ 		return (0);
++	}
+ 
+ 	memset(sess, 0, sizeof(struct session_op));
+ 
+@@ -496,6 +531,20 @@
+  * gets called when libcrypto requests a cipher NID.
+  */
+ 
++/* RC4 */
++const EVP_CIPHER cryptodev_rc4 = {
++	NID_rc4,
++	1, 16, 0,
++	EVP_CIPH_VARIABLE_LENGTH,
++	cryptodev_init_key,
++	cryptodev_cipher,
++	cryptodev_cleanup,
++	sizeof(struct dev_crypto_state),
++	NULL,
++	NULL,
++	NULL
++};
++
+ /* DES CBC EVP */
+ const EVP_CIPHER cryptodev_des_cbc = {
+ 	NID_des_cbc,
+@@ -563,6 +612,32 @@
+ 	NULL
+ };
+ 
++const EVP_CIPHER cryptodev_aes_192_cbc = {
++	NID_aes_192_cbc,
++	16, 24, 16,
++	EVP_CIPH_CBC_MODE,
++	cryptodev_init_key,
++	cryptodev_cipher,
++	cryptodev_cleanup,
++	sizeof(struct dev_crypto_state),
++	EVP_CIPHER_set_asn1_iv,
++	EVP_CIPHER_get_asn1_iv,
++	NULL
++};
++
++const EVP_CIPHER cryptodev_aes_256_cbc = {
++	NID_aes_256_cbc,
++	16, 32, 16,
++	EVP_CIPH_CBC_MODE,
++	cryptodev_init_key,
++	cryptodev_cipher,
++	cryptodev_cleanup,
++	sizeof(struct dev_crypto_state),
++	EVP_CIPHER_set_asn1_iv,
++	EVP_CIPHER_get_asn1_iv,
++	NULL
++};
++
+ /*
+  * Registered by the ENGINE when used to find out how to deal with
+  * a particular NID in the ENGINE. this says what we'll do at the
+@@ -576,6 +651,9 @@
+ 		return (cryptodev_usable_ciphers(nids));
+ 
+ 	switch (nid) {
++	case NID_rc4:
++		*cipher = &cryptodev_rc4;
++		break;
+ 	case NID_des_ede3_cbc:
+ 		*cipher = &cryptodev_3des_cbc;
+ 		break;
+@@ -591,6 +669,12 @@
+ 	case NID_aes_128_cbc:
+ 		*cipher = &cryptodev_aes_cbc;
+ 		break;
++	case NID_aes_192_cbc:
++		*cipher = &cryptodev_aes_192_cbc;
++		break;
++	case NID_aes_256_cbc:
++		*cipher = &cryptodev_aes_256_cbc;
++		break;
+ 	default:
+ 		*cipher = NULL;
+ 		break;
+@@ -598,6 +682,234 @@
+ 	return (*cipher != NULL);
+ }
+ 
++
++#ifdef USE_CRYPTODEV_DIGESTS
++
++/* convert digest type to cryptodev */
++static int
++digest_nid_to_cryptodev(int nid)
++{
++	int i;
++
++	for (i = 0; digests[i].id; i++)
++		if (digests[i].nid == nid)
++			return (digests[i].id);
++	return (0);
++}
++
++
++static int
++digest_key_length(int nid)
++{
++	int i;
++
++	for (i = 0; digests[i].id; i++)
++		if (digests[i].nid == nid)
++			return digests[i].keylen;
++	return (0);
++}
++
++
++static int cryptodev_digest_init(EVP_MD_CTX *ctx)
++{
++	struct dev_crypto_state *state = ctx->md_data;
++	struct session_op *sess = &state->d_sess;
++	int digest;
++
++	if ((digest = digest_nid_to_cryptodev(ctx->digest->type)) == NID_undef){
++		printf("cryptodev_digest_init: Can't get digest \n");
++		return (0);
++	}
++
++	memset(state, 0, sizeof(struct dev_crypto_state));
++
++	if ((state->d_fd = get_dev_crypto()) < 0) {
++		printf("cryptodev_digest_init: Can't get Dev \n");
++		return (0);
++	}
++
++	sess->mackey = state->dummy_mac_key;
++	sess->mackeylen = digest_key_length(ctx->digest->type);
++	sess->mac = digest;
++
++	if (ioctl(state->d_fd, CIOCGSESSION, sess) < 0) {
++		close(state->d_fd);
++		state->d_fd = -1;
++		printf("cryptodev_digest_init: Open session failed\n");
++		return (0);
++	}
++
++	return (1);
++}
++
++static int cryptodev_digest_update(EVP_MD_CTX *ctx, const void *data,
++		size_t count)
++{
++	struct crypt_op cryp;
++	struct dev_crypto_state *state = ctx->md_data;
++	struct session_op *sess = &state->d_sess;
++
++	if (!data || state->d_fd < 0) {
++		printf("cryptodev_digest_update: illegal inputs \n");
++		return (0);
++	}
++
++	if (!count) {
++		return (0);
++	}
++
++	if (!(ctx->flags & EVP_MD_CTX_FLAG_ONESHOT)) {
++		/* if application doesn't support one buffer */
++		state->mac_data = OPENSSL_realloc(state->mac_data, state->mac_len + count);
++
++		if (!state->mac_data) {
++			printf("cryptodev_digest_update: realloc failed\n");
++			return (0);
++		}
++
++		memcpy(state->mac_data + state->mac_len, data, count);
++   		state->mac_len += count;
++	
++		return (1);
++	}
++
++	memset(&cryp, 0, sizeof(cryp));
++
++	cryp.ses = sess->ses;
++	cryp.flags = 0;
++	cryp.len = count;
++	cryp.src = (caddr_t) data;
++	cryp.dst = NULL;
++	cryp.mac = state->digest_res;
++	if (ioctl(state->d_fd, CIOCCRYPT, &cryp) < 0) {
++		printf("cryptodev_digest_update: digest failed\n");
++		return (0);
++	}
++	return (1);
++}
++
++
++static int cryptodev_digest_final(EVP_MD_CTX *ctx, unsigned char *md)
++{
++	struct crypt_op cryp;
++	struct dev_crypto_state *state = ctx->md_data;
++	struct session_op *sess = &state->d_sess;
++
++	int ret = 1;
++
++	if (!md || state->d_fd < 0) {
++		printf("cryptodev_digest_final: illegal input\n");
++		return(0);
++	}
++
++	if (! (ctx->flags & EVP_MD_CTX_FLAG_ONESHOT) ) {
++		/* if application doesn't support one buffer */
++		memset(&cryp, 0, sizeof(cryp));
++
++		cryp.ses = sess->ses;
++		cryp.flags = 0;
++		cryp.len = state->mac_len;
++		cryp.src = state->mac_data;
++		cryp.dst = NULL;
++		cryp.mac = md;
++
++		if (ioctl(state->d_fd, CIOCCRYPT, &cryp) < 0) {
++			printf("cryptodev_digest_final: digest failed\n");
++			return (0);
++		}
++
++		return 1;
++	}
++
++	memcpy(md, state->digest_res, ctx->digest->md_size);
++
++	return (ret);
++}
++
++
++static int cryptodev_digest_cleanup(EVP_MD_CTX *ctx)
++{
++	int ret = 1;
++	struct dev_crypto_state *state = ctx->md_data;
++	struct session_op *sess = &state->d_sess;
++
++	if (state->d_fd < 0) {
++		printf("cryptodev_digest_cleanup: illegal input\n");
++		return (0);
++	}
++
++	if (state->mac_data) {
++		OPENSSL_free(state->mac_data);
++		state->mac_data = NULL;
++		state->mac_len = 0;
++	}
++
++	if (state->copy)
++		return 1;
++
++	if (ioctl(state->d_fd, CIOCFSESSION, &sess->ses) < 0) {
++		printf("cryptodev_digest_cleanup: failed to close session\n");
++		ret = 0;
++	} else {
++		ret = 1;
++	}
++	close(state->d_fd);	
++	state->d_fd = -1;
++
++	return (ret);
++}
++
++static int cryptodev_digest_copy(EVP_MD_CTX *to,const EVP_MD_CTX *from)
++{
++	struct dev_crypto_state *fstate = from->md_data;
++	struct dev_crypto_state *dstate = to->md_data;
++
++	memcpy(dstate, fstate, sizeof(struct dev_crypto_state));
++
++	if (fstate->mac_len != 0) {
++		dstate->mac_data = OPENSSL_malloc(fstate->mac_len);
++		memcpy(dstate->mac_data, fstate->mac_data, fstate->mac_len);
++	}
++
++	dstate->copy = 1;
++
++	return 1;
++}
++
++
++const EVP_MD cryptodev_sha1 = {
++	NID_sha1,
++	NID_undef, 
++	SHA_DIGEST_LENGTH, 
++	EVP_MD_FLAG_ONESHOT,
++	cryptodev_digest_init,
++	cryptodev_digest_update,
++	cryptodev_digest_final,
++	cryptodev_digest_copy,
++	cryptodev_digest_cleanup,
++	EVP_PKEY_NULL_method,
++	SHA_CBLOCK,
++	sizeof(struct dev_crypto_state),
++};
++
++const EVP_MD cryptodev_md5 = {
++	NID_md5,
++	NID_undef, 
++	16 /* MD5_DIGEST_LENGTH */, 
++	EVP_MD_FLAG_ONESHOT,
++	cryptodev_digest_init,
++	cryptodev_digest_update,
++	cryptodev_digest_final,
++	cryptodev_digest_copy,
++	cryptodev_digest_cleanup,
++	EVP_PKEY_NULL_method,
++	64 /* MD5_CBLOCK */,
++	sizeof(struct dev_crypto_state),
++};
++
++#endif /* USE_CRYPTODEV_DIGESTS */
++
++
+ static int
+ cryptodev_engine_digests(ENGINE *e, const EVP_MD **digest,
+     const int **nids, int nid)
+@@ -606,10 +918,15 @@
+ 		return (cryptodev_usable_digests(nids));
+ 
+ 	switch (nid) {
++#ifdef USE_CRYPTODEV_DIGESTS
+ 	case NID_md5:
+-		*digest = NULL; /* need to make a clean md5 critter */
++		*digest = &cryptodev_md5; 
+ 		break;
++	case NID_sha1:
++		*digest = &cryptodev_sha1;
++ 		break;
+ 	default:
++#endif /* USE_CRYPTODEV_DIGESTS */
+ 		*digest = NULL;
+ 		break;
+ 	}
+@@ -625,7 +942,7 @@
+ bn2crparam(const BIGNUM *a, struct crparam *crp)
+ {
+ 	int i, j, k;
+-	ssize_t words, bytes, bits;
++	ssize_t bytes, bits;
+ 	u_char *b;
+ 
+ 	crp->crp_p = NULL;
+@@ -637,6 +954,7 @@
+ 	b = malloc(bytes);
+ 	if (b == NULL)
+ 		return (1);
++	memset(b, 0, bytes);
+ 
+ 	crp->crp_p = b;
+ 	crp->crp_nbits = bits;
+@@ -681,7 +999,7 @@
+ {
+ 	int i;
+ 
+-	for (i = 0; i <= kop->crk_iparams + kop->crk_oparams; i++) {
++	for (i = 0; i < kop->crk_iparams + kop->crk_oparams; i++) {
+ 		if (kop->crk_param[i].crp_p)
+ 			free(kop->crk_param[i].crp_p);
+ 		kop->crk_param[i].crp_p = NULL;
+@@ -756,12 +1074,10 @@
+ }
+ 
+ static int
+-cryptodev_rsa_nocrt_mod_exp(BIGNUM *r0, const BIGNUM *I, RSA *rsa)
++cryptodev_rsa_nocrt_mod_exp(BIGNUM *r0, const BIGNUM *I, RSA *rsa, BN_CTX *ctx)
+ {
+ 	int r;
+-	BN_CTX *ctx;
+-
+-	ctx = BN_CTX_new();
++	ctx = BN_CTX_new(); /* not sure why we reallocate this. DM */
+ 	r = cryptodev_bn_mod_exp(r0, I, rsa->d, rsa->n, ctx, NULL);
+ 	BN_CTX_free(ctx);
+ 	return (r);
+diff -Nru openssl-0.9.8l_a/crypto/engine/engine.h openssl-0.9.8l_b/crypto/engine/engine.h
+--- openssl-0.9.8l_a/crypto/engine/engine.h	2008-06-04 21:01:40.000000000 +0300
++++ openssl-0.9.8l_b/crypto/engine/engine.h	2009-12-08 17:44:45.000000000 +0200
+@@ -703,7 +703,7 @@
+  * values. */
+ void *ENGINE_get_static_state(void);
+ 
+-#if defined(__OpenBSD__) || defined(__FreeBSD__)
++#if defined(__OpenBSD__) || defined(__FreeBSD__) || defined(HAVE_CRYPTODEV)
+ void ENGINE_setup_bsd_cryptodev(void);
+ #endif
+ 
+diff -Nru openssl-0.9.8l_a/crypto/evp/c_all.c openssl-0.9.8l_b/crypto/evp/c_all.c
+--- openssl-0.9.8l_a/crypto/evp/c_all.c	2004-08-29 19:36:04.000000000 +0300
++++ openssl-0.9.8l_b/crypto/evp/c_all.c	2009-12-08 17:44:45.000000000 +0200
+@@ -83,7 +83,7 @@
+ 	OpenSSL_add_all_ciphers();
+ 	OpenSSL_add_all_digests();
+ #ifndef OPENSSL_NO_ENGINE
+-# if defined(__OpenBSD__) || defined(__FreeBSD__)
++# if defined(__OpenBSD__) || defined(__FreeBSD__) || defined(HAVE_CRYPTODEV)
+ 	ENGINE_setup_bsd_cryptodev();
+ # endif
+ #endif
+diff -Nru openssl-0.9.8l_a/crypto/evp/c_alld.c openssl-0.9.8l_b/crypto/evp/c_alld.c
+--- openssl-0.9.8l_a/crypto/evp/c_alld.c	2005-05-01 00:51:40.000000000 +0300
++++ openssl-0.9.8l_b/crypto/evp/c_alld.c	2009-12-08 17:44:45.000000000 +0200
+@@ -81,7 +81,7 @@
+ 	EVP_add_digest(EVP_dss());
+ #endif
+ #endif
+-#ifndef OPENSSL_NO_SHA
++#if !defined(OPENSSL_NO_SHA) && !defined(OPENSSL_NO_SHA1)
+ 	EVP_add_digest(EVP_sha1());
+ 	EVP_add_digest_alias(SN_sha1,"ssl3-sha1");
+ 	EVP_add_digest_alias(SN_sha1WithRSAEncryption,SN_sha1WithRSA);
+diff -Nru openssl-0.9.8l_a/engines/Makefile openssl-0.9.8l_b/engines/Makefile
+--- openssl-0.9.8l_a/engines/Makefile	2009-11-05 15:54:01.000000000 +0200
++++ openssl-0.9.8l_b/engines/Makefile	2009-12-08 17:44:45.000000000 +0200
+@@ -96,6 +96,7 @@
+ 			( echo installing $$l; \
+ 			  if [ "$(PLATFORM)" != "Cygwin" ]; then \
+ 				case "$(CFLAGS)" in \
++				*OPENSSL_NO_HW*)	continue;;	\
+ 				*DSO_DLFCN*)	sfx="so";;	\
+ 				*DSO_DL*)	sfx="sl";;	\
+ 				*)		sfx="bad";;	\
+diff -Nru openssl-0.9.8l_a/include/openssl/engine.h openssl-0.9.8l_b/include/openssl/engine.h
+--- openssl-0.9.8l_a/include/openssl/engine.h	2008-06-04 21:01:40.000000000 +0300
++++ openssl-0.9.8l_b/include/openssl/engine.h	2009-12-08 17:44:45.000000000 +0200
+@@ -703,7 +703,7 @@
+  * values. */
+ void *ENGINE_get_static_state(void);
+ 
+-#if defined(__OpenBSD__) || defined(__FreeBSD__)
++#if defined(__OpenBSD__) || defined(__FreeBSD__) || defined(HAVE_CRYPTODEV)
+ void ENGINE_setup_bsd_cryptodev(void);
+ #endif
+ 
+diff -Nru openssl-0.9.8l_a/INSTALL openssl-0.9.8l_b/INSTALL
+--- openssl-0.9.8l_a/INSTALL	2008-04-07 09:35:41.000000000 +0300
++++ openssl-0.9.8l_b/INSTALL	2009-12-08 17:44:45.000000000 +0200
+@@ -103,6 +103,12 @@
+                 define preprocessor symbols, specify additional libraries,
+                 library directories or other compiler options.
+ 
++  --with-cryptodev Enabled the BSD cryptodev engine even if we are not using
++		BSD.  Useful if you are running ocf-linux or something
++		similar.  Once enabled you can also enable the use of
++		cryptodev digests,  with is usually slower unless you have
++		large amounts data.  Use --with-cryptodev-digests to force
++		it.
+ 
+  Installation in Detail
+  ----------------------
+diff -Nru openssl-0.9.8l_a/Makefile.org openssl-0.9.8l_b/Makefile.org
+--- openssl-0.9.8l_a/Makefile.org	2009-03-04 00:40:29.000000000 +0200
++++ openssl-0.9.8l_b/Makefile.org	2009-12-08 17:44:45.000000000 +0200
+@@ -502,7 +502,7 @@
+ 
+ links:
+ 	@$(PERL) $(TOP)/util/mkdir-p.pl include/openssl
+-	@$(PERL) $(TOP)/util/mklink.pl include/openssl $(EXHEADER)
++	@$(PERL) $(TOP)/util/mklink.pl include/openssl $(HEADER) $(EXHEADER)
+ 	@set -e; target=links; $(RECURSIVE_BUILD_CMD)
+ 	@if [ -z "$(FIPSCANLIB)" ]; then \
+ 		set -e; target=links; dir=fips ; $(BUILD_CMD) ; \
+diff -Nru openssl-0.9.8l_a/Makefile.org.orig openssl-0.9.8l_b/Makefile.org.orig
+--- openssl-0.9.8l_a/Makefile.org.orig	1970-01-01 02:00:00.000000000 +0200
++++ openssl-0.9.8l_b/Makefile.org.orig	2009-03-04 00:40:29.000000000 +0200
+@@ -0,0 +1,726 @@
++##
++## Makefile for OpenSSL
++##
++
++VERSION=
++MAJOR=
++MINOR=
++SHLIB_VERSION_NUMBER=
++SHLIB_VERSION_HISTORY=
++SHLIB_MAJOR=
++SHLIB_MINOR=
++SHLIB_EXT=
++PLATFORM=dist
++OPTIONS=
++CONFIGURE_ARGS=
++SHLIB_TARGET=
++
++# HERE indicates where this Makefile lives.  This can be used to indicate
++# where sub-Makefiles are expected to be.  Currently has very limited usage,
++# and should probably not be bothered with at all.
++HERE=.
++
++# INSTALL_PREFIX is for package builders so that they can configure
++# for, say, /usr/ and yet have everything installed to /tmp/somedir/usr/.
++# Normally it is left empty.
++INSTALL_PREFIX=
++INSTALLTOP=/usr/local/ssl
++
++# Do not edit this manually. Use Configure --openssldir=DIR do change this!
++OPENSSLDIR=/usr/local/ssl
++
++# NO_IDEA - Define to build without the IDEA algorithm
++# NO_RC4  - Define to build without the RC4 algorithm
++# NO_RC2  - Define to build without the RC2 algorithm
++# THREADS - Define when building with threads, you will probably also need any
++#           system defines as well, i.e. _REENTERANT for Solaris 2.[34]
++# TERMIO  - Define the termio terminal subsystem, needed if sgtty is missing.
++# TERMIOS - Define the termios terminal subsystem, Silicon Graphics.
++# LONGCRYPT - Define to use HPUX 10.x's long password modification to crypt(3).
++# DEVRANDOM - Give this the value of the 'random device' if your OS supports
++#           one.  32 bytes will be read from this when the random
++#           number generator is initalised.
++# SSL_FORBID_ENULL - define if you want the server to be not able to use the
++#           NULL encryption ciphers.
++#
++# LOCK_DEBUG - turns on lots of lock debug output :-)
++# REF_CHECK - turn on some xyz_free() assertions.
++# REF_PRINT - prints some stuff on structure free.
++# CRYPTO_MDEBUG - turns on my 'memory leak' detecting stuff
++# MFUNC - Make all Malloc/Free/Realloc calls call
++#       CRYPTO_malloc/CRYPTO_free/CRYPTO_realloc which can be setup to
++#       call application defined callbacks via CRYPTO_set_mem_functions()
++# MD5_ASM needs to be defined to use the x86 assembler for MD5
++# SHA1_ASM needs to be defined to use the x86 assembler for SHA1
++# RMD160_ASM needs to be defined to use the x86 assembler for RIPEMD160
++# Do not define B_ENDIAN or L_ENDIAN if 'unsigned long' == 8.  It must
++# equal 4.
++# PKCS1_CHECK - pkcs1 tests.
++
++CC= cc
++CFLAG= -O
++DEPFLAG= 
++PEX_LIBS= 
++EX_LIBS= 
++EXE_EXT= 
++ARFLAGS=
++AR=ar $(ARFLAGS) r
++ARD=ar $(ARFLAGS) d
++RANLIB= ranlib
++PERL= perl
++TAR= tar
++TARFLAGS= --no-recursion
++MAKEDEPPROG=makedepend
++
++# We let the C compiler driver to take care of .s files. This is done in
++# order to be excused from maintaining a separate set of architecture
++# dependent assembler flags. E.g. if you throw -mcpu=ultrasparc at SPARC
++# gcc, then the driver will automatically translate it to -xarch=v8plus
++# and pass it down to assembler.
++AS=$(CC) -c
++ASFLAG=$(CFLAG)
++
++# For x86 assembler: Set PROCESSOR to 386 if you want to support
++# the 80386.
++PROCESSOR=
++
++# CPUID module collects small commonly used assembler snippets
++CPUID_OBJ= 
++BN_ASM= bn_asm.o
++DES_ENC= des_enc.o fcrypt_b.o
++AES_ASM_OBJ=aes_core.o aes_cbc.o
++BF_ENC= bf_enc.o
++CAST_ENC= c_enc.o
++RC4_ENC= rc4_enc.o
++RC5_ENC= rc5_enc.o
++MD5_ASM_OBJ= 
++SHA1_ASM_OBJ= 
++RMD160_ASM_OBJ= 
++
++# KRB5 stuff
++KRB5_INCLUDES=
++LIBKRB5=
++
++# Zlib stuff
++ZLIB_INCLUDE=
++LIBZLIB=
++
++# This is the location of fipscanister.o and friends.
++# The FIPS module build will place it $(INSTALLTOP)/lib
++# but since $(INSTALLTOP) can only take the default value
++# when the module is built it will be in /usr/local/ssl/lib
++# $(INSTALLTOP) for this build make be different so hard
++# code the path.
++
++FIPSLIBDIR=/usr/local/ssl/lib/
++
++# This is set to "y" if fipscanister.o is compiled internally as
++# opposed to coming from an external validated location.
++
++FIPSCANISTERINTERNAL=n
++
++# The location of the library which contains fipscanister.o
++# normally it will be libcrypto unless fipsdso is set in which
++# case it will be libfips. If not compiling in FIPS mode at all
++# this is empty making it a useful test for a FIPS compile.
++
++FIPSCANLIB=
++
++# Shared library base address. Currently only used on Windows.
++#
++
++BASEADDR=
++
++DIRS=   crypto fips ssl engines apps test tools
++SHLIBDIRS= crypto ssl fips
++
++# dirs in crypto to build
++SDIRS=  \
++	objects \
++	md2 md4 md5 sha mdc2 hmac ripemd \
++	des aes rc2 rc4 rc5 idea bf cast camellia seed \
++	bn ec rsa dsa ecdsa dh ecdh dso engine \
++	buffer bio stack lhash rand err \
++	evp asn1 pem x509 x509v3 conf txt_db pkcs7 pkcs12 comp ocsp ui krb5 \
++	store cms pqueue jpake
++# keep in mind that the above list is adjusted by ./Configure
++# according to no-xxx arguments...
++
++# tests to perform.  "alltests" is a special word indicating that all tests
++# should be performed.
++TESTS = alltests
++
++MAKEFILE= Makefile
++
++MANDIR=$(OPENSSLDIR)/man
++MAN1=1
++MAN3=3
++MANSUFFIX=
++SHELL=/bin/sh
++
++TOP=    .
++ONEDIRS=out tmp
++EDIRS=  times doc bugs util include certs ms shlib mt demos perl sf dep VMS
++WDIRS=  windows
++LIBS=   libcrypto.a libssl.a
++SHARED_CRYPTO=libcrypto$(SHLIB_EXT)
++SHARED_SSL=libssl$(SHLIB_EXT)
++SHARED_FIPS=
++SHARED_LIBS=
++SHARED_LIBS_LINK_EXTS=
++SHARED_LDFLAGS=
++
++GENERAL=        Makefile
++BASENAME=       openssl
++NAME=           $(BASENAME)-$(VERSION)
++TARFILE=        $(NAME).tar
++WTARFILE=       $(NAME)-win.tar
++EXHEADER=       e_os2.h
++HEADER=         e_os.h
++
++all: Makefile build_all openssl.pc libssl.pc libcrypto.pc
++
++# as we stick to -e, CLEARENV ensures that local variables in lower
++# Makefiles remain local and variable. $${VAR+VAR} is tribute to Korn
++# shell, which [annoyingly enough] terminates unset with error if VAR
++# is not present:-( TOP= && unset TOP is tribute to HP-UX /bin/sh,
++# which terminates unset with error if no variable was present:-(
++CLEARENV=	TOP= && unset TOP $${LIB+LIB} $${LIBS+LIBS}	\
++		$${INCLUDE+INCLUDE} $${INCLUDES+INCLUDES}	\
++		$${DIR+DIR} $${DIRS+DIRS} $${SRC+SRC}		\
++		$${LIBSRC+LIBSRC} $${LIBOBJ+LIBOBJ} $${ALL+ALL}	\
++		$${EXHEADER+EXHEADER} $${HEADER+HEADER}		\
++		$${GENERAL+GENERAL} $${CFLAGS+CFLAGS}		\
++		$${ASFLAGS+ASFLAGS} $${AFLAGS+AFLAGS}		\
++		$${LDCMD+LDCMD} $${LDFLAGS+LDFLAGS}		\
++		$${SHAREDCMD+SHAREDCMD} $${SHAREDFLAGS+SHAREDFLAGS}	\
++		$${SHARED_LIB+SHARED_LIB} $${LIBEXTRAS+LIBEXTRAS}
++
++BUILDENV=	PLATFORM='${PLATFORM}' PROCESSOR='${PROCESSOR}' \
++		CC='${CC}' CFLAG='${CFLAG}' 			\
++		AS='${CC}' ASFLAG='${CFLAG} -c'			\
++		AR='${AR}' PERL='${PERL}' RANLIB='${RANLIB}'	\
++		SDIRS='${SDIRS}' LIBRPATH='${INSTALLTOP}/lib'	\
++		INSTALL_PREFIX='${INSTALL_PREFIX}'		\
++		INSTALLTOP='${INSTALLTOP}' OPENSSLDIR='${OPENSSLDIR}'	\
++		MAKEDEPEND='$$$${TOP}/util/domd $$$${TOP} -MD ${MAKEDEPPROG}' \
++		DEPFLAG='-DOPENSSL_NO_DEPRECATED ${DEPFLAG}'	\
++		MAKEDEPPROG='${MAKEDEPPROG}'			\
++		SHARED_LDFLAGS='${SHARED_LDFLAGS}'		\
++		KRB5_INCLUDES='${KRB5_INCLUDES}' LIBKRB5='${LIBKRB5}'	\
++		EXE_EXT='${EXE_EXT}' SHARED_LIBS='${SHARED_LIBS}'	\
++		SHLIB_EXT='${SHLIB_EXT}' SHLIB_TARGET='${SHLIB_TARGET}'	\
++		PEX_LIBS='${PEX_LIBS}' EX_LIBS='${EX_LIBS}'	\
++		CPUID_OBJ='${CPUID_OBJ}'			\
++		BN_ASM='${BN_ASM}' DES_ENC='${DES_ENC}' 	\
++		AES_ASM_OBJ='${AES_ASM_OBJ}'			\
++		BF_ENC='${BF_ENC}' CAST_ENC='${CAST_ENC}'	\
++		RC4_ENC='${RC4_ENC}' RC5_ENC='${RC5_ENC}'	\
++		SHA1_ASM_OBJ='${SHA1_ASM_OBJ}'			\
++		MD5_ASM_OBJ='${MD5_ASM_OBJ}'			\
++		RMD160_ASM_OBJ='${RMD160_ASM_OBJ}'		\
++		FIPSLIBDIR='${FIPSLIBDIR}'			\
++		FIPSCANLIB="$${FIPSCANLIB:-$(FIPSCANLIB)}"	\
++		FIPSCANISTERINTERNAL='${FIPSCANISTERINTERNAL}'	\
++		FIPS_EX_OBJ='${FIPS_EX_OBJ}'	\
++		THIS=$${THIS:-$@} MAKEFILE=Makefile MAKEOVERRIDES=
++# MAKEOVERRIDES= effectively "equalizes" GNU-ish and SysV-ish make flavors,
++# which in turn eliminates ambiguities in variable treatment with -e.
++
++# BUILD_CMD is a generic macro to build a given target in a given
++# subdirectory.  The target must be given through the shell variable
++# `target' and the subdirectory to build in must be given through `dir'.
++# This macro shouldn't be used directly, use RECURSIVE_BUILD_CMD or
++# BUILD_ONE_CMD instead.
++#
++# BUILD_ONE_CMD is a macro to build a given target in a given
++# subdirectory if that subdirectory is part of $(DIRS).  It requires
++# exactly the same shell variables as BUILD_CMD.
++#
++# RECURSIVE_BUILD_CMD is a macro to build a given target in all
++# subdirectories defined in $(DIRS).  It requires that the target
++# is given through the shell variable `target'.
++BUILD_CMD=  if [ -d "$$dir" ]; then \
++	    (	[ $$target != all -a -z "$(FIPSCANLIB)" ] && FIPSCANLIB=/dev/null; \
++		cd $$dir && echo "making $$target in $$dir..." && \
++		$(CLEARENV) && $(MAKE) -e $(BUILDENV) TOP=.. DIR=$$dir $$target \
++	    ) || exit 1; \
++	    fi
++RECURSIVE_BUILD_CMD=for dir in $(DIRS); do $(BUILD_CMD); done
++BUILD_ONE_CMD=\
++	if echo " $(DIRS) " | grep " $$dir " >/dev/null 2>/dev/null; then \
++		$(BUILD_CMD); \
++	fi
++
++reflect:
++	@[ -n "$(THIS)" ] && $(CLEARENV) && $(MAKE) $(THIS) -e $(BUILDENV)
++
++FIPS_EX_OBJ= ../crypto/aes/aes_cfb.o \
++	../crypto/aes/aes_ecb.o \
++	../crypto/aes/aes_ofb.o \
++	../crypto/bn/bn_add.o \
++	../crypto/bn/bn_blind.o \
++	../crypto/bn/bn_ctx.o \
++	../crypto/bn/bn_div.o \
++	../crypto/bn/bn_exp2.o \
++	../crypto/bn/bn_exp.o \
++	../crypto/bn/bn_gcd.o \
++	../crypto/bn/bn_lib.o \
++	../crypto/bn/bn_mod.o \
++	../crypto/bn/bn_mont.o \
++	../crypto/bn/bn_mul.o \
++	../crypto/bn/bn_prime.o \
++	../crypto/bn/bn_rand.o \
++	../crypto/bn/bn_recp.o \
++	../crypto/bn/bn_shift.o \
++	../crypto/bn/bn_sqr.o \
++	../crypto/bn/bn_word.o \
++	../crypto/bn/bn_x931p.o \
++	../crypto/buffer/buf_str.o \
++	../crypto/cryptlib.o \
++	../crypto/des/cfb64ede.o \
++	../crypto/des/cfb64enc.o \
++	../crypto/des/cfb_enc.o \
++	../crypto/des/ecb3_enc.o \
++	../crypto/des/ecb_enc.o \
++	../crypto/des/ofb64ede.o \
++	../crypto/des/ofb64enc.o \
++	../crypto/des/fcrypt.o \
++	../crypto/des/set_key.o \
++	../crypto/dsa/dsa_utl.o \
++	../crypto/dsa/dsa_sign.o \
++	../crypto/dsa/dsa_vrf.o \
++	../crypto/err/err.o \
++	../crypto/evp/digest.o \
++	../crypto/evp/enc_min.o \
++	../crypto/evp/e_aes.o \
++	../crypto/evp/e_des3.o \
++	../crypto/evp/p_sign.o \
++	../crypto/evp/p_verify.o \
++	../crypto/mem_clr.o \
++	../crypto/mem.o \
++	../crypto/rand/md_rand.o \
++	../crypto/rand/rand_egd.o \
++	../crypto/rand/randfile.o \
++	../crypto/rand/rand_lib.o \
++	../crypto/rand/rand_os2.o \
++	../crypto/rand/rand_unix.o \
++	../crypto/rand/rand_win.o \
++	../crypto/rsa/rsa_lib.o \
++	../crypto/rsa/rsa_none.o \
++	../crypto/rsa/rsa_oaep.o \
++	../crypto/rsa/rsa_pk1.o \
++	../crypto/rsa/rsa_pss.o \
++	../crypto/rsa/rsa_ssl.o \
++	../crypto/rsa/rsa_x931.o \
++	../crypto/sha/sha1dgst.o \
++	../crypto/sha/sha256.o \
++	../crypto/sha/sha512.o \
++	../crypto/uid.o
++
++sub_all: build_all
++build_all: build_libs build_apps build_tests build_tools
++
++build_libs: build_crypto build_fips build_ssl build_shared build_engines
++
++build_crypto:
++	if [ -n "$(FIPSCANLIB)" ]; then \
++		EXCL_OBJ='$(AES_ASM_OBJ) $(BN_ASM) $(DES_ENC) $(CPUID_OBJ) $(SHA1_ASM_OBJ) $(FIPS_EX_OBJ)' ; export EXCL_OBJ ; \
++		ARX='$(PERL) $${TOP}/util/arx.pl $(AR)' ; \
++	else \
++		ARX='${AR}' ; \
++	fi ; export ARX ; \
++		dir=crypto; target=all; $(BUILD_ONE_CMD)
++build_fips:
++	@dir=fips; target=all; [ -z "$(FIPSCANLIB)" ] || $(BUILD_ONE_CMD)
++build_ssl:
++	@dir=ssl; target=all; $(BUILD_ONE_CMD)
++build_engines:
++	@dir=engines; target=all; $(BUILD_ONE_CMD)
++build_apps:
++	@dir=apps; target=all; $(BUILD_ONE_CMD)
++build_tests:
++	@dir=test; target=all; $(BUILD_ONE_CMD)
++build_tools:
++	@dir=tools; target=all; $(BUILD_ONE_CMD)
++
++all_testapps: build_libs build_testapps
++build_testapps:
++	@dir=crypto; target=testapps; $(BUILD_ONE_CMD)
++
++build_shared:	$(SHARED_LIBS)
++libcrypto$(SHLIB_EXT): libcrypto.a $(SHARED_FIPS)
++	@if [ "$(SHLIB_TARGET)" != "" ]; then \
++		if [ "$(FIPSCANLIB)" = "libfips" ]; then \
++			$(ARD) libcrypto.a fipscanister.o ; \
++			$(MAKE) SHLIBDIRS='crypto' SHLIBDEPS='-lfips' build-shared; \
++			$(AR) libcrypto.a fips/fipscanister.o ; \
++		else \
++			if [ "$(FIPSCANLIB)" = "libcrypto" ]; then \
++				FIPSLD_CC=$(CC); CC=fips/fipsld; \
++				export CC FIPSLD_CC; \
++			fi; \
++			$(MAKE) -e SHLIBDIRS='crypto' build-shared; \
++		fi \
++	else \
++		echo "There's no support for shared libraries on this platform" >&2; \
++		exit 1; \
++	fi
++
++libssl$(SHLIB_EXT): libcrypto$(SHLIB_EXT) libssl.a
++	@if [ "$(SHLIB_TARGET)" != "" ]; then \
++		shlibdeps=-lcrypto; \
++		[ "$(FIPSCANLIB)" = "libfips" ] && shlibdeps="$$shlibdeps -lfips"; \
++		$(MAKE) SHLIBDIRS=ssl SHLIBDEPS="$$shlibdeps" build-shared; \
++	else \
++		echo "There's no support for shared libraries on this platform" >&2 ; \
++		exit 1; \
++	fi
++
++fips/fipscanister.o:	build_fips
++libfips$(SHLIB_EXT):		fips/fipscanister.o
++	@if [ "$(SHLIB_TARGET)" != "" ]; then \
++		FIPSLD_CC=$(CC); CC=fips/fipsld; export CC FIPSLD_CC; \
++		$(MAKE) -f Makefile.shared -e $(BUILDENV) \
++			CC=$${CC} LIBNAME=fips THIS=$@ \
++			LIBEXTRAS=fips/fipscanister.o \
++			LIBDEPS="$(EX_LIBS)" \
++			LIBVERSION=${SHLIB_MAJOR}.${SHLIB_MINOR} \
++			link_o.$(SHLIB_TARGET) || { rm -f $@; exit 1; } \
++	else \
++		echo "There's no support for shared libraries on this platform" >&2; \
++		exit 1; \
++	fi
++
++libfips.a:
++	dir=fips; target=all; $(BUILD_ONE_CMD)
++
++clean-shared:
++	@set -e; for i in $(SHLIBDIRS); do \
++		if [ -n "$(SHARED_LIBS_LINK_EXTS)" ]; then \
++			tmp="$(SHARED_LIBS_LINK_EXTS)"; \
++			for j in $${tmp:-x}; do \
++				( set -x; rm -f lib$$i$$j ); \
++			done; \
++		fi; \
++		( set -x; rm -f lib$$i$(SHLIB_EXT) ); \
++		if [ "$(PLATFORM)" = "Cygwin" ]; then \
++			( set -x; rm -f cyg$$i$(SHLIB_EXT) lib$$i$(SHLIB_EXT).a ); \
++		fi; \
++	done
++
++link-shared:
++	@ set -e; for i in ${SHLIBDIRS}; do \
++		$(MAKE) -f $(HERE)/Makefile.shared -e $(BUILDENV) \
++			LIBNAME=$$i LIBVERSION=${SHLIB_MAJOR}.${SHLIB_MINOR} \
++			LIBCOMPATVERSIONS=";${SHLIB_VERSION_HISTORY}" \
++			symlink.$(SHLIB_TARGET); \
++		libs="$$libs -l$$i"; \
++	done
++
++build-shared: do_$(SHLIB_TARGET) link-shared
++
++do_$(SHLIB_TARGET):
++	@ set -e; libs='-L. ${SHLIBDEPS}'; for i in ${SHLIBDIRS}; do \
++		if [ "${SHLIBDIRS}" = "ssl" -a -n "$(LIBKRB5)" ]; then \
++			libs="$(LIBKRB5) $$libs"; \
++		fi; \
++		$(CLEARENV) && $(MAKE) -f Makefile.shared -e $(BUILDENV) \
++			LIBNAME=$$i LIBVERSION=${SHLIB_MAJOR}.${SHLIB_MINOR} \
++			LIBCOMPATVERSIONS=";${SHLIB_VERSION_HISTORY}" \
++			LIBDEPS="$$libs $(EX_LIBS)" \
++			link_a.$(SHLIB_TARGET); \
++		libs="-l$$i $$libs"; \
++	done
++
++libcrypto.pc: Makefile
++	@ ( echo 'prefix=$(INSTALLTOP)'; \
++	    echo 'exec_prefix=$${prefix}'; \
++	    echo 'libdir=$${exec_prefix}/lib'; \
++	    echo 'includedir=$${prefix}/include'; \
++	    echo ''; \
++	    echo 'Name: OpenSSL-libcrypto'; \
++	    echo 'Description: OpenSSL cryptography library'; \
++	    echo 'Version: '$(VERSION); \
++	    echo 'Requires: '; \
++	    echo 'Libs: -L$${libdir} -lcrypto $(EX_LIBS)'; \
++	    echo 'Cflags: -I$${includedir} $(KRB5_INCLUDES)' ) > libcrypto.pc
++
++libssl.pc: Makefile
++	@ ( echo 'prefix=$(INSTALLTOP)'; \
++	    echo 'exec_prefix=$${prefix}'; \
++	    echo 'libdir=$${exec_prefix}/lib'; \
++	    echo 'includedir=$${prefix}/include'; \
++	    echo ''; \
++	    echo 'Name: OpenSSL'; \
++	    echo 'Description: Secure Sockets Layer and cryptography libraries'; \
++	    echo 'Version: '$(VERSION); \
++	    echo 'Requires: '; \
++	    echo 'Libs: -L$${libdir} -lssl -lcrypto $(EX_LIBS)'; \
++	    echo 'Cflags: -I$${includedir} $(KRB5_INCLUDES)' ) > libssl.pc
++
++openssl.pc: Makefile
++	@ ( echo 'prefix=$(INSTALLTOP)'; \
++	    echo 'exec_prefix=$${prefix}'; \
++	    echo 'libdir=$${exec_prefix}/lib'; \
++	    echo 'includedir=$${prefix}/include'; \
++	    echo ''; \
++	    echo 'Name: OpenSSL'; \
++	    echo 'Description: Secure Sockets Layer and cryptography libraries and tools'; \
++	    echo 'Version: '$(VERSION); \
++	    echo 'Requires: '; \
++	    echo 'Libs: -L$${libdir} -lssl -lcrypto $(EX_LIBS)'; \
++	    echo 'Cflags: -I$${includedir} $(KRB5_INCLUDES)' ) > openssl.pc
++
++Makefile: Makefile.org Configure config
++	@echo "Makefile is older than Makefile.org, Configure or config."
++	@echo "Reconfigure the source tree (via './config' or 'perl Configure'), please."
++	@false
++
++libclean:
++	rm -f *.map *.so *.so.* *.dll engines/*.so engines/*.dll *.a engines/*.a */lib */*/lib
++
++clean:	libclean
++	rm -f shlib/*.o *.o core a.out fluff rehash.time testlog make.log cctest cctest.c
++	@set -e; target=clean; $(RECURSIVE_BUILD_CMD)
++	rm -f $(LIBS)
++	rm -f openssl.pc libssl.pc libcrypto.pc
++	rm -f speed.* .pure
++	rm -f $(TARFILE)
++	@set -e; for i in $(ONEDIRS) ;\
++	do \
++	rm -fr $$i/*; \
++	done
++
++makefile.one: files
++	$(PERL) util/mk1mf.pl >makefile.one; \
++	sh util/do_ms.sh
++
++files:
++	$(PERL) $(TOP)/util/files.pl Makefile > $(TOP)/MINFO
++	@set -e; target=files; $(RECURSIVE_BUILD_CMD)
++
++links:
++	@$(PERL) $(TOP)/util/mkdir-p.pl include/openssl
++	@$(PERL) $(TOP)/util/mklink.pl include/openssl $(EXHEADER)
++	@set -e; target=links; $(RECURSIVE_BUILD_CMD)
++	@if [ -z "$(FIPSCANLIB)" ]; then \
++		set -e; target=links; dir=fips ; $(BUILD_CMD) ; \
++	fi
++
++gentests:
++	@(cd test && echo "generating dummy tests (if needed)..." && \
++	$(CLEARENV) && $(MAKE) -e $(BUILDENV) TESTS='${TESTS}' OPENSSL_DEBUG_MEMORY=on generate );
++
++dclean:
++	rm -f *.bak
++	@set -e; target=dclean; $(RECURSIVE_BUILD_CMD)
++
++rehash: rehash.time
++rehash.time: certs
++	@(OPENSSL="`pwd`/util/opensslwrap.sh"; \
++	  OPENSSL_DEBUG_MEMORY=on; \
++	  export OPENSSL OPENSSL_DEBUG_MEMORY; \
++	  $(PERL) tools/c_rehash certs)
++	touch rehash.time
++
++test:   tests
++
++tests: rehash
++	@(cd test && echo "testing..." && \
++	$(CLEARENV) && $(MAKE) -e $(BUILDENV) TOP=.. TESTS='${TESTS}' OPENSSL_DEBUG_MEMORY=on tests );
++	util/opensslwrap.sh version -a
++
++report:
++	@$(PERL) util/selftest.pl
++
++depend:
++	@set -e; target=depend; $(RECURSIVE_BUILD_CMD)
++
++lint:
++	@set -e; target=lint; $(RECURSIVE_BUILD_CMD)
++
++tags:
++	rm -f TAGS
++	find . -name '[^.]*.[ch]' | xargs etags -a
++
++errors:
++	$(PERL) util/mkerr.pl -recurse -write
++	(cd engines; $(MAKE) PERL=$(PERL) errors)
++	$(PERL) util/ck_errf.pl */*.c */*/*.c
++
++stacks:
++	$(PERL) util/mkstack.pl -write
++
++util/libeay.num::
++	$(PERL) util/mkdef.pl crypto update
++
++util/ssleay.num::
++	$(PERL) util/mkdef.pl ssl update
++
++crypto/objects/obj_dat.h: crypto/objects/obj_dat.pl crypto/objects/obj_mac.h
++	$(PERL) crypto/objects/obj_dat.pl crypto/objects/obj_mac.h crypto/objects/obj_dat.h
++crypto/objects/obj_mac.h: crypto/objects/objects.pl crypto/objects/objects.txt crypto/objects/obj_mac.num
++	$(PERL) crypto/objects/objects.pl crypto/objects/objects.txt crypto/objects/obj_mac.num crypto/objects/obj_mac.h
++
++apps/openssl-vms.cnf: apps/openssl.cnf
++	$(PERL) VMS/VMSify-conf.pl < apps/openssl.cnf > apps/openssl-vms.cnf
++
++crypto/bn/bn_prime.h: crypto/bn/bn_prime.pl
++	$(PERL) crypto/bn/bn_prime.pl >crypto/bn/bn_prime.h
++
++
++TABLE: Configure
++	(echo 'Output of `Configure TABLE'"':"; \
++	$(PERL) Configure TABLE) > TABLE
++
++update: errors stacks util/libeay.num util/ssleay.num crypto/objects/obj_dat.h apps/openssl-vms.cnf crypto/bn/bn_prime.h TABLE depend
++
++# Build distribution tar-file. As the list of files returned by "find" is
++# pretty long, on several platforms a "too many arguments" error or similar
++# would occur. Therefore the list of files is temporarily stored into a file
++# and read directly, requiring GNU-Tar. Call "make TAR=gtar dist" if the normal
++# tar does not support the --files-from option.
++tar:
++	find . -type d -print | xargs chmod 755
++	find . -type f -print | xargs chmod a+r
++	find . -type f -perm -0100 -print | xargs chmod a+x
++	find * \! -path CVS/\* \! -path \*/CVS/\* \! -name CVS \! -name .cvsignore \! -name STATUS \! -name TABLE | sort > ../$(TARFILE).list; \
++	$(TAR) $(TARFLAGS) --files-from ../$(TARFILE).list -cvf - | \
++	tardy --user_number=0  --user_name=openssl \
++	      --group_number=0 --group_name=openssl \
++	      --prefix=openssl-$(VERSION) - |\
++	gzip --best >../$(TARFILE).gz; \
++	rm -f ../$(TARFILE).list; \
++	ls -l ../$(TARFILE).gz
++
++tar-snap:
++	@$(TAR) $(TARFLAGS) -cvf - \
++		`find * \! -path CVS/\* \! -path \*/CVS/\* \! -name CVS \! -name .cvsignore \! -name STATUS \! -name TABLE \! -name '*.o' \! -name '*.a' \! -name '*.so' \! -name '*.so.*'  \! -name 'openssl' \! -name '*test' \! -name '.#*' \! -name '*~' | sort` |\
++	tardy --user_number=0  --user_name=openssl \
++	      --group_number=0 --group_name=openssl \
++	      --prefix=openssl-$(VERSION) - > ../$(TARFILE);\
++	ls -l ../$(TARFILE)
++
++dist:   
++	$(PERL) Configure dist
++	@$(MAKE) dist_pem_h
++	@$(MAKE) SDIRS='${SDIRS}' clean
++	@$(MAKE) TAR='${TAR}' TARFLAGS='${TARFLAGS}' tar
++
++dist_pem_h:
++	(cd crypto/pem; $(MAKE) -e $(BUILDENV) pem.h; $(MAKE) clean)
++
++install: all install_docs install_sw
++
++install_sw:
++	@$(PERL) $(TOP)/util/mkdir-p.pl $(INSTALL_PREFIX)$(INSTALLTOP)/bin \
++		$(INSTALL_PREFIX)$(INSTALLTOP)/lib \
++		$(INSTALL_PREFIX)$(INSTALLTOP)/lib/engines \
++		$(INSTALL_PREFIX)$(INSTALLTOP)/lib/pkgconfig \
++		$(INSTALL_PREFIX)$(INSTALLTOP)/include/openssl \
++		$(INSTALL_PREFIX)$(OPENSSLDIR)/misc \
++		$(INSTALL_PREFIX)$(OPENSSLDIR)/certs \
++		$(INSTALL_PREFIX)$(OPENSSLDIR)/private
++	@set -e; headerlist="$(EXHEADER)"; for i in $$headerlist;\
++	do \
++	(cp $$i $(INSTALL_PREFIX)$(INSTALLTOP)/include/openssl/$$i; \
++	chmod 644 $(INSTALL_PREFIX)$(INSTALLTOP)/include/openssl/$$i ); \
++	done;
++	@set -e; target=install; $(RECURSIVE_BUILD_CMD)
++	@set -e; for i in $(LIBS) ;\
++	do \
++		if [ -f "$$i" ]; then \
++		(       echo installing $$i; \
++			cp $$i $(INSTALL_PREFIX)$(INSTALLTOP)/lib/$$i.new; \
++			$(RANLIB) $(INSTALL_PREFIX)$(INSTALLTOP)/lib/$$i.new; \
++			chmod 644 $(INSTALL_PREFIX)$(INSTALLTOP)/lib/$$i.new; \
++			mv -f $(INSTALL_PREFIX)$(INSTALLTOP)/lib/$$i.new $(INSTALL_PREFIX)$(INSTALLTOP)/lib/$$i ); \
++		fi; \
++	done;
++	@set -e; if [ -n "$(SHARED_LIBS)" ]; then \
++		tmp="$(SHARED_LIBS)"; \
++		for i in $${tmp:-x}; \
++		do \
++			if [ -f "$$i" -o -f "$$i.a" ]; then \
++			(       echo installing $$i; \
++				if [ "$(PLATFORM)" != "Cygwin" ]; then \
++					cp $$i $(INSTALL_PREFIX)$(INSTALLTOP)/lib/$$i.new; \
++					chmod 555 $(INSTALL_PREFIX)$(INSTALLTOP)/lib/$$i.new; \
++					mv -f $(INSTALL_PREFIX)$(INSTALLTOP)/lib/$$i.new $(INSTALL_PREFIX)$(INSTALLTOP)/lib/$$i; \
++				else \
++					c=`echo $$i | sed 's/^lib\(.*\)\.dll\.a/cyg\1-$(SHLIB_VERSION_NUMBER).dll/'`; \
++					cp $$c $(INSTALL_PREFIX)$(INSTALLTOP)/bin/$$c.new; \
++					chmod 755 $(INSTALL_PREFIX)$(INSTALLTOP)/bin/$$c.new; \
++					mv -f $(INSTALL_PREFIX)$(INSTALLTOP)/bin/$$c.new $(INSTALL_PREFIX)$(INSTALLTOP)/bin/$$c; \
++					cp $$i $(INSTALL_PREFIX)$(INSTALLTOP)/lib/$$i.new; \
++					chmod 644 $(INSTALL_PREFIX)$(INSTALLTOP)/lib/$$i.new; \
++					mv -f $(INSTALL_PREFIX)$(INSTALLTOP)/lib/$$i.new $(INSTALL_PREFIX)$(INSTALLTOP)/lib/$$i; \
++				fi ); \
++			fi; \
++		done; \
++		(	here="`pwd`"; \
++			cd $(INSTALL_PREFIX)$(INSTALLTOP)/lib; \
++			$(MAKE) -f $$here/Makefile HERE="$$here" link-shared ); \
++		if [ "$(INSTALLTOP)" != "/usr" ]; then \
++			echo 'OpenSSL shared libraries have been installed in:'; \
++			echo '  $(INSTALLTOP)'; \
++			echo ''; \
++			sed -e '1,/^$$/d' doc/openssl-shared.txt; \
++		fi; \
++	fi
++	cp libcrypto.pc $(INSTALL_PREFIX)$(INSTALLTOP)/lib/pkgconfig
++	chmod 644 $(INSTALL_PREFIX)$(INSTALLTOP)/lib/pkgconfig/libcrypto.pc
++	cp libssl.pc $(INSTALL_PREFIX)$(INSTALLTOP)/lib/pkgconfig
++	chmod 644 $(INSTALL_PREFIX)$(INSTALLTOP)/lib/pkgconfig/libssl.pc
++	cp openssl.pc $(INSTALL_PREFIX)$(INSTALLTOP)/lib/pkgconfig
++	chmod 644 $(INSTALL_PREFIX)$(INSTALLTOP)/lib/pkgconfig/openssl.pc
++
++install_docs:
++	@$(PERL) $(TOP)/util/mkdir-p.pl \
++		$(INSTALL_PREFIX)$(MANDIR)/man1 \
++		$(INSTALL_PREFIX)$(MANDIR)/man3 \
++		$(INSTALL_PREFIX)$(MANDIR)/man5 \
++		$(INSTALL_PREFIX)$(MANDIR)/man7
++	@pod2man="`cd util; ./pod2mantest $(PERL)`"; \
++	here="`pwd`"; \
++	filecase=; \
++	if [ "$(PLATFORM)" = "DJGPP" -o "$(PLATFORM)" = "Cygwin" -o "$(PLATFORM)" = "mingw" ]; then \
++		filecase=-i; \
++	fi; \
++	set -e; for i in doc/apps/*.pod; do \
++		fn=`basename $$i .pod`; \
++		sec=`$(PERL) util/extract-section.pl 1 < $$i`; \
++		echo "installing man$$sec/$$fn.$${sec}$(MANSUFFIX)"; \
++		(cd `$(PERL) util/dirname.pl $$i`; \
++		sh -c "$$pod2man \
++			--section=$$sec --center=OpenSSL \
++			--release=$(VERSION) `basename $$i`") \
++			>  $(INSTALL_PREFIX)$(MANDIR)/man$$sec/$$fn.$${sec}$(MANSUFFIX); \
++		$(PERL) util/extract-names.pl < $$i | \
++			(grep -v $$filecase "^$$fn\$$"; true) | \
++			(grep -v "[	]"; true) | \
++			(cd $(INSTALL_PREFIX)$(MANDIR)/man$$sec/; \
++			 while read n; do \
++				$$here/util/point.sh $$fn.$${sec}$(MANSUFFIX) "$$n".$${sec}$(MANSUFFIX); \
++			 done); \
++	done; \
++	set -e; for i in doc/crypto/*.pod doc/ssl/*.pod; do \
++		fn=`basename $$i .pod`; \
++		sec=`$(PERL) util/extract-section.pl 3 < $$i`; \
++		echo "installing man$$sec/$$fn.$${sec}$(MANSUFFIX)"; \
++		(cd `$(PERL) util/dirname.pl $$i`; \
++		sh -c "$$pod2man \
++			--section=$$sec --center=OpenSSL \
++			--release=$(VERSION) `basename $$i`") \
++			>  $(INSTALL_PREFIX)$(MANDIR)/man$$sec/$$fn.$${sec}$(MANSUFFIX); \
++		$(PERL) util/extract-names.pl < $$i | \
++			(grep -v $$filecase "^$$fn\$$"; true) | \
++			(grep -v "[	]"; true) | \
++			(cd $(INSTALL_PREFIX)$(MANDIR)/man$$sec/; \
++			 while read n; do \
++				$$here/util/point.sh $$fn.$${sec}$(MANSUFFIX) "$$n".$${sec}$(MANSUFFIX); \
++			 done); \
++	done
++
++# DO NOT DELETE THIS LINE -- make depend depends on it.
+diff -Nru openssl-0.9.8l_a/Makefile.shared openssl-0.9.8l_b/Makefile.shared
+--- openssl-0.9.8l_a/Makefile.shared	2008-09-17 18:56:40.000000000 +0300
++++ openssl-0.9.8l_b/Makefile.shared	2009-12-08 17:44:45.000000000 +0200
+@@ -6,13 +6,13 @@
+ # properly
+ 
+ # CC contains the current compiler.  This one MUST be defined
+-CC=cc
+-CFLAGS=$(CFLAG)
++CC?=cc
++CFLAGS?=$(CFLAG)
+ # LDFLAGS contains flags to be used when temporary object files (when building
+ # shared libraries) are created, or when an application is linked.
+ # SHARED_LDFLAGS contains flags to be used when the shared library is created.
+-LDFLAGS=
+-SHARED_LDFLAGS=
++LDFLAGS?=
++SHARED_LDFLAGS?=
+ 
+ # LIBNAME contains just the name of the library, without prefix ("lib"
+ # on Unix, "cyg" for certain forms under Cygwin...) or suffix (.a, .so,
+diff -Nru openssl-0.9.8l_a/makefile-uclinuxdist openssl-0.9.8l_b/makefile-uclinuxdist
+--- openssl-0.9.8l_a/makefile-uclinuxdist	1970-01-01 02:00:00.000000000 +0200
++++ openssl-0.9.8l_b/makefile-uclinuxdist	2009-12-08 17:44:45.000000000 +0200
+@@ -0,0 +1,138 @@
++#
++# this makefile gets recursed through by various bits of the build
++# so we need to only setup some things when invoked from outside
++# this directory.
++#
++# davidm@snapgear.com
++#
++
++IN_LIBSSL := true
++export IN_LIBSSL
++
++CONFIG_OPTS  := --prefix=// --install_prefix=$(shell pwd)/build/install
++
++ifdef CONFIG_USER_FLATFSD_FLATFSD
++CONFIG_OPTS += --openssldir=/etc/config
++else
++CONFIG_OPTS += --openssldir=/etc
++endif
++ifdef DISABLE_SHARED_SSL
++CONFIG_OPTS += no-shared
++else
++CONFIG_OPTS += shared
++endif
++
++CONFIG_OPTS += no-rc2
++CONFIG_OPTS += no-krb5
++CONFIG_OPTS += no-rc5
++CONFIG_OPTS += no-md2
++CONFIG_OPTS += no-idea
++#CONFIG_OPTS += no-pem
++#CONFIG_OPTS += no-md5
++#CONFIG_OPTS += no-sha
++#CONFIG_OPTS += no-hmac
++#CONFIG_OPTS += no-des
++#CONFIG_OPTS += no-aes
++#CONFIG_OPTS += no-bn
++CONFIG_OPTS += no-ec
++#CONFIG_OPTS += no-rsa
++#CONFIG_OPTS += no-dsa
++CONFIG_OPTS += no-ecdsa
++#CONFIG_OPTS += no-dh
++CONFIG_OPTS += no-ecdh
++CONFIG_OPTS += no-dso
++#CONFIG_OPTS += no-engine
++#CONFIG_OPTS += no-buffer
++#CONFIG_OPTS += no-bio
++#CONFIG_OPTS += no-stack
++#CONFIG_OPTS += no-lhash
++#CONFIG_OPTS += no-rand
++CONFIG_OPTS += no-err
++#CONFIG_OPTS += no-evp
++#CONFIG_OPTS += no-asn1
++#CONFIG_OPTS += no-x509
++#CONFIG_OPTS += no-x509v3
++#CONFIG_OPTS += no-txt_db
++#CONFIG_OPTS += no-pkcs7
++#CONFIG_OPTS += no-pkcs12
++#CONFIG_OPTS += no-comp
++#CONFIG_OPTS += no-ocsp
++#CONFIG_OPTS += no-ui
++#CONFIG_OPTS += no-store
++CONFIG_OPTS += no-pqueue
++
++# REVISIT: It would be better to have OPENSSL config options
++# which turn on this support as needed
++ifeq ($(CONFIG_USER_NESSUS_NASL)$(CONFIG_USER_SSH_SSH),)
++CONFIG_OPTS += no-ripemd
++CONFIG_OPTS += no-cast
++CONFIG_OPTS += no-rc4
++endif
++
++ifeq ($(CONFIG_USER_NESSUS_NASL)$(CONFIG_USER_SSH_SSH)$(CONFIG_PROP_SSCEP_SSCEP),)
++CONFIG_OPTS += no-bf
++endif
++
++ifeq ($(CONFIG_USER_OPENVPN_OPENVPN)$(CONFIG_USER_WGET),)
++CONFIG_OPTS += no-md4
++endif
++
++ifdef CONFIG_OCF_OCF
++CONFIG_OPTS += --with-cryptodev
++#CONFIG_OPTS += --with-cryptodev-digests
++endif
++
++#
++# if you want engines (they are dl loaded),  a few things
++# need to be setup,  you will also need to mod everything
++# to link against -ldl if it uses libcrypto.  By default we
++# disable it (cryptodev suport is still included).
++#
++ifdef YOU_WANT_DYNAMIC_HW_ENGINES_ENABLED
++LIBSSL_dlfcn = dlfcn
++else
++CONFIG_OPTS += no-hw
++LIBSSL_dlfcn =
++endif
++
++#
++# our libs aren't in the default location yet
++#
++LDFLAGS += -L$(ROOTDIR)/lib/libssl/build
++export LDFLAGS
++
++all: build/configured
++	$(MAKE) -C build
++	$(MAKE) -C build install_sw
++
++build/configured: makefile config Configure
++	rm -rf build
++	find . -type d > .dirs
++	find . ! -type d | grep -v ./makefile > .files
++	while read t; do mkdir -p build/$$t; done < .dirs
++	while read t; do ln -s `pwd`/$$t build/$$t; done < .files
++	rm -f .dirs .files
++	chmod +x build/config
++	cd build; MACHINE=uClinux-dist ./config $(CONFIG_OPTS)
++	$(MAKE) -C build depend
++	$(MAKE) -C build links
++	touch build/configured
++
++clean:
++	-rm -rf build
++
++romfs:
++	cd build/install/lib; \
++	for i in *.so*; do \
++		if [ -L $$i ]; then \
++			$(ROMFSINST) -s `find $$i -printf %l` /lib/$$i; \
++		elif [ -f $$i ]; then \
++			$(ROMFSINST) /lib/$$i; \
++		fi; \
++	done
++
++romfs_user:
++	$(ROMFSINST) -e CONFIG_USER_OPENSSL_APPS build/install/bin/openssl /bin/openssl
++	# $(ROMFSINST) -e CONFIG_USER_OPENSSL_APPS build/install/bin/c_rehash /bin/c_rehash
++
++
+diff -Nru openssl-0.9.8l_a/util/domd.orig openssl-0.9.8l_b/util/domd.orig
+--- openssl-0.9.8l_a/util/domd.orig	1970-01-01 02:00:00.000000000 +0200
++++ openssl-0.9.8l_b/util/domd.orig	2009-01-21 23:44:52.000000000 +0200
+@@ -0,0 +1,34 @@
++#!/bin/sh
++# Do a makedepend, only leave out the standard headers
++# Written by Ben Laurie <ben@algroup.co.uk> 19 Jan 1999
++
++TOP=$1
++shift
++if [ "$1" = "-MD" ]; then
++    shift
++    MAKEDEPEND=$1
++    shift
++fi
++if [ "$MAKEDEPEND" = "" ]; then MAKEDEPEND=makedepend; fi
++
++cp Makefile Makefile.save
++# fake the presence of Kerberos
++touch $TOP/krb5.h
++if [ "$MAKEDEPEND" = "gcc" ]; then
++    args=""
++    while [ $# -gt 0 ]; do
++	if [ "$1" != "--" ]; then args="$args $1"; fi
++	shift
++    done
++    sed -e '/^# DO NOT DELETE.*/,$d' < Makefile > Makefile.tmp
++    echo '# DO NOT DELETE THIS LINE -- make depend depends on it.' >> Makefile.tmp
++    ${CC:-gcc} -D OPENSSL_DOING_MAKEDEPEND -M $args >> Makefile.tmp
++    ${PERL} $TOP/util/clean-depend.pl < Makefile.tmp > Makefile.new
++    rm -f Makefile.tmp
++else
++    ${MAKEDEPEND} -D OPENSSL_DOING_MAKEDEPEND $@
++    ${PERL} $TOP/util/clean-depend.pl < Makefile > Makefile.new
++fi
++mv Makefile.new Makefile
++# unfake the presence of Kerberos
++rm $TOP/krb5.h

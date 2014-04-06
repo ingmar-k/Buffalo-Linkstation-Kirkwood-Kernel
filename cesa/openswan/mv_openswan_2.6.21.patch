@@ -1,0 +1,688 @@
+diff -Nur openswan-2.6.21/linux/include/openswan/ipsec_param.h openswan-2.6.21.patched/linux/include/openswan/ipsec_param.h
+--- openswan-2.6.21/linux/include/openswan/ipsec_param.h	2009-03-30 16:11:28.000000000 +0300
++++ openswan-2.6.21.patched/linux/include/openswan/ipsec_param.h	2009-10-19 09:23:03.000000000 +0200
+@@ -220,7 +220,7 @@
+ 
+ /* kernels > 2.4.2 */
+ #if defined(IP_SELECT_IDENT) && defined(IP_SELECT_IDENT_NEW)
+-#define KLIPS_IP_SELECT_IDENT(iph, skb) ip_select_ident(iph, skb->dst, NULL)
++#define KLIPS_IP_SELECT_IDENT(iph, skb) ip_select_ident(iph, skb_dst(skb), NULL)
+ #endif
+ 
+ #endif /* SUSE_LINUX_2_4_19_IS_STUPID */
+diff -Nur openswan-2.6.21/linux/net/ipsec/ipcomp.c openswan-2.6.21.patched/linux/net/ipsec/ipcomp.c
+--- openswan-2.6.21/linux/net/ipsec/ipcomp.c	2009-03-30 16:11:28.000000000 +0300
++++ openswan-2.6.21.patched/linux/net/ipsec/ipcomp.c	2009-10-19 09:54:36.000000000 +0200
+@@ -622,7 +622,7 @@
+ #ifdef NET_21
+         n->csum = 0;
+         n->priority=skb->priority;
+-        n->dst=dst_clone(skb->dst);
++        skb_dst_set(n,dst_clone(skb_dst(skb))); //n->dst=dst_clone(skb->dst);
+         headlen = skb_network_header(skb) - skb->data;
+         skb_set_network_header(n, headlen);
+ #ifndef NETDEV_23
+diff -Nur openswan-2.6.21/linux/net/ipsec/ipsec_mast.c openswan-2.6.21.patched/linux/net/ipsec/ipsec_mast.c
+--- openswan-2.6.21/linux/net/ipsec/ipsec_mast.c	2009-03-30 16:11:28.000000000 +0300
++++ openswan-2.6.21.patched/linux/net/ipsec/ipsec_mast.c	2009-10-21 15:16:07.000000000 +0200
+@@ -87,7 +87,7 @@
+ DEBUG_NO_STATIC int
+ ipsec_mast_open(struct net_device *dev)
+ {
+-        struct mastpriv *prv = dev->priv; 
++        struct mastpriv *prv = netdev_priv(dev); 
+ 
+ 	prv = prv;
+ 
+@@ -307,8 +307,8 @@
+ 
+ 	ixs->ipsp = ipsec_sa_getbyref(SAref);
+ 	if(ixs->ipsp == NULL) {
+-		KLIPS_ERROR(debug_mast, "%s: no SA for saref=%d (sp=%p)\n",
+-			    dev->name, SAref, skb->sp);
++		KLIPS_ERROR(debug_mast, "%s: no SA for saref=%d\n",
++			    dev->name, SAref);
+ 		ipsec_kfree_skb(skb);
+ 		ipsec_xmit_cleanup(ixs);
+ 		ipsec_xmit_state_delete(ixs);
+@@ -334,7 +334,7 @@
+ DEBUG_NO_STATIC struct net_device_stats *
+ ipsec_mast_get_stats(struct net_device *dev)
+ {
+-	return &(((struct mastpriv *)(dev->priv))->mystats);
++	return &(((struct mastpriv *)netdev_priv(dev))->mystats);
+ }
+ 
+ #if 0
+@@ -496,7 +496,7 @@
+ ipsec_mast_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
+ {
+ 	struct ipsecmastconf *cf = (struct ipsecmastconf *)&ifr->ifr_data;
+-	struct ipsecpriv *prv = dev->priv;
++	struct ipsecpriv *prv = netdev_priv(dev);
+ 
+ 	cf = cf;
+ 	prv=prv;
+@@ -529,7 +529,7 @@
+ ipsec_mast_device_event(struct notifier_block *unused, unsigned long event, void *ptr)
+ {
+ 	struct net_device *dev = ptr;
+-	struct mastpriv *priv = dev->priv;
++	struct mastpriv *priv = netdev_priv(dev);
+ 
+ 	priv = priv;
+ 
+@@ -643,6 +643,19 @@
+ 	return NOTIFY_DONE;
+ }
+ 
++
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,31)
++static struct net_device_ops ipsec_mast_netdevice_ops = 
++{
++	.ndo_open			= ipsec_mast_open,
++	.ndo_stop			= ipsec_mast_close,
++	.ndo_start_xmit			= ipsec_mast_start_xmit,
++	.ndo_get_stats			= ipsec_mast_get_stats,
++	.ndo_do_ioctl			= ipsec_mast_ioctl,
++	.ndo_neigh_setup		= ipsec_mast_neigh_setup_dev
++};
++#endif
++
+ /*
+  *	Called when an ipsec mast device is initialized.
+  *	The ipsec mast device structure is passed to us.
+@@ -659,22 +672,28 @@
+ 		    dev->name ? dev->name : "NULL");
+ 
+ 	/* Add our mast functions to the device */
++#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,31)
+ 	dev->open		= ipsec_mast_open;
+ 	dev->stop		= ipsec_mast_close;
+ 	dev->hard_start_xmit	= ipsec_mast_start_xmit;
+ 	dev->get_stats		= ipsec_mast_get_stats;
++#else
++	dev->netdev_ops = &ipsec_mast_netdevice_ops;
++#endif
+ 
+-	dev->priv = kmalloc(sizeof(struct mastpriv), GFP_KERNEL);
+-	if (dev->priv == NULL)
+-		return -ENOMEM;
+-	memset((caddr_t)(dev->priv), 0, sizeof(struct mastpriv));
++	//dev->priv = kmalloc(sizeof(struct mastpriv), GFP_KERNEL);
++	//if (dev->priv == NULL)
++	//	return -ENOMEM;
++	//memset((caddr_t)(dev->priv), 0, sizeof(struct mastpriv));
+ 
+ 	for(i = 0; i < sizeof(zeroes); i++) {
+ 		((__u8*)(zeroes))[i] = 0;
+ 	}
+ 	
++#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,31)
+ 	dev->set_multicast_list = NULL;
+ 	dev->do_ioctl		= ipsec_mast_ioctl;
++#endif
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,24)
+ 	dev->header_ops = NULL;
+ #else
+@@ -682,8 +701,10 @@
+ 	dev->rebuild_header 	= NULL;
+ 	dev->header_cache_update= NULL;
+ #endif
++#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,31)
+ 	dev->set_mac_address 	= NULL;
+ 	dev->neigh_setup        = ipsec_mast_neigh_setup_dev;
++#endif
+ 	dev->hard_header_len 	= 8+20+20+8;
+ 	dev->mtu		= 0;
+ 	dev->addr_len		= 0;
+@@ -701,6 +722,10 @@
+ #ifdef alloc_netdev
+ static void ipsec_mast_netdev_setup(struct net_device *dev)
+ {
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,31)
++	ipsec_mast_probe(dev);
++#endif
++
+ }
+ #endif
+ struct net_device *mastdevices[IPSEC_NUM_IFMAX];
+@@ -729,7 +754,7 @@
+ 	snprintf(name, IFNAMSIZ, MAST_DEV_FORMAT, vifnum);
+ 	
+ #ifdef alloc_netdev
+-	im = alloc_netdev(0, name, ipsec_mast_netdev_setup);
++	im = alloc_netdev(sizeof(struct mastpriv), name, ipsec_mast_netdev_setup);
+ #else
+ 	im = (struct net_device *)kmalloc(sizeof(struct net_device),GFP_KERNEL);
+ #endif
+@@ -743,8 +768,9 @@
+ 	memcpy(im->name, name, IFNAMSIZ);
+ #endif
+ 		
++#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,31)
+ 	im->init = ipsec_mast_probe;
+-
++#endif
+ 	if(register_netdev(im) != 0) {
+ 		printk(KERN_ERR "ipsec_mast: failed to register %s\n",
+ 		       im->name);
+@@ -785,8 +811,8 @@
+ 	kfree(dev_ipsec->name);
+ 	dev_ipsec->name=NULL;
+ #endif /* !NETDEV_23 */
+-	kfree(dev_ipsec->priv);
+-	dev_ipsec->priv=NULL;
++	//kfree(dev_ipsec->priv);
++	//dev_ipsec->priv=NULL;
+ 
+ 	return 0;
+ }
+@@ -853,8 +879,8 @@
+ 			dev_mast = mastdevices[i];
+ 			ipsec_dev_put(dev_mast);
+ 			unregister_netdev(dev_mast);
+-			kfree(dev_mast->priv);
+-			dev_mast->priv=NULL;
++			//kfree(dev_mast->priv);
++			//dev_mast->priv=NULL;
+ 			dev_put(mastdevices[i]);
+ 			mastdevices[i]=NULL;
+ 		}
+diff -Nur openswan-2.6.21/linux/net/ipsec/ipsec_ocf.c openswan-2.6.21.patched/linux/net/ipsec/ipsec_ocf.c
+--- openswan-2.6.21/linux/net/ipsec/ipsec_ocf.c	2009-03-30 16:11:28.000000000 +0300
++++ openswan-2.6.21.patched/linux/net/ipsec/ipsec_ocf.c	2009-07-12 16:41:04.000000000 +0300
+@@ -367,7 +367,7 @@
+ 
+ 		/* OCF needs cri_mlen initialized in order to properly migrate the
+ 		 * session to another driver */
+-		crda->crd_mlen = 12;
++		//crda->crd_mlen = 12;
+ 
+ 		/* Copy the authenticator to check aganinst later */
+ 		memcpy(irs->hash, irs->authenticator, 12);
+@@ -599,7 +599,7 @@
+ 
+ 		/* OCF needs cri_mlen initialized in order to properly migrate
+ 		 * the session to another driver */
+-		crda->crd_mlen = 12;
++		//crda->crd_mlen = 12;
+ 
+ 		crda->crd_key    = ipsp->ips_key_a;
+ 		crda->crd_klen   = ipsp->ips_key_bits_a;
+diff -Nur openswan-2.6.21/linux/net/ipsec/ipsec_proc.c openswan-2.6.21.patched/linux/net/ipsec/ipsec_proc.c
+--- openswan-2.6.21/linux/net/ipsec/ipsec_proc.c	2009-03-30 16:11:28.000000000 +0300
++++ openswan-2.6.21.patched/linux/net/ipsec/ipsec_proc.c	2009-10-21 15:17:40.000000000 +0200
+@@ -550,7 +550,7 @@
+ 		ipsec_snprintf(name, (ssize_t) sizeof(name), IPSEC_DEV_FORMAT, i);
+ 		dev = __ipsec_dev_get(name);
+ 		if(dev) {
+-			priv = (struct ipsecpriv *)(dev->priv);
++			priv = (struct ipsecpriv *)netdev_priv(dev);
+ 			len += ipsec_snprintf(buffer+len, length-len, "%s",
+ 				       dev->name);
+ 			if(priv) {
+@@ -947,9 +947,11 @@
+ 				item->read_proc  = it->readthing;
+ 				item->write_proc = it->writething;
+ 				item->data       = it->data;
++#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,30)
+ #ifdef MODULE
+ 				item->owner = THIS_MODULE;
+ #endif
++#endif
+ 			} else {
+ 				error |= 1;
+ 			}
+diff -Nur openswan-2.6.21/linux/net/ipsec/ipsec_rcv.c openswan-2.6.21.patched/linux/net/ipsec/ipsec_rcv.c
+--- openswan-2.6.21/linux/net/ipsec/ipsec_rcv.c	2009-03-30 16:11:28.000000000 +0300
++++ openswan-2.6.21.patched/linux/net/ipsec/ipsec_rcv.c	2009-10-21 15:19:56.000000000 +0200
+@@ -483,8 +483,8 @@
+ 		}
+ 		skb->dev = irs->ipsp->ips_out;
+ 		
+-		if(skb->dev && skb->dev->get_stats) {
+-			struct net_device_stats *stats = skb->dev->get_stats(skb->dev);
++		if(skb->dev && skb->dev->netdev_ops->ndo_get_stats) {
++			struct net_device_stats *stats = skb->dev->netdev_ops->ndo_get_stats(skb->dev);
+ 			irs->stats = stats;
+ 		}
+ 	} 
+@@ -843,7 +843,7 @@
+ 
+ 		for(i = 0; i <= ipsecdevices_max; i++) {
+ 			if(ipsecdevices[i] == NULL) continue;
+-			prvdev = ipsecdevices[i]->priv;
++			prvdev = netdev_priv(ipsecdevices[i]);
+ 			
+ 			if(prvdev == NULL) continue;
+ 
+@@ -1699,9 +1699,9 @@
+ 	/* release the dst that was attached, since we have likely
+ 	 * changed the actual destination of the packet.
+ 	 */
+-	if(skb->dst) {
+-		dst_release(skb->dst);
+-		skb->dst = NULL;
++	if(skb_dst(skb)) {
++		dst_release(skb_dst(skb));
++		skb_dst_set(skb,NULL);
+ 	}
+ 	skb->pkt_type = PACKET_HOST;
+ 	if(irs->hard_header_len &&
+@@ -1992,7 +1992,7 @@
+ 		   {
+ 		    snprintf(name, IFNAMSIZ, IPSEC_DEV_FORMAT, i);
+ 		    ipsecdev = __ipsec_dev_get(name);
+-		    prv = ipsecdev ? (struct ipsecpriv *)(ipsecdev->priv) : NULL;
++		    prv = ipsecdev ? (struct ipsecpriv *)netdev_priv(ipsecdev) : NULL;
+ 		    prvdev = prv ? (struct net_device *)(prv->dev) : NULL;
+ 		    if(prvdev && !strncmp(prvdev->name, skb->dev->name, IFNAMSIZ))
+ 			{
+diff -Nur openswan-2.6.21/linux/net/ipsec/ipsec_tunnel.c openswan-2.6.21.patched/linux/net/ipsec/ipsec_tunnel.c
+--- openswan-2.6.21/linux/net/ipsec/ipsec_tunnel.c	2009-03-30 16:11:28.000000000 +0300
++++ openswan-2.6.21.patched/linux/net/ipsec/ipsec_tunnel.c	2009-10-21 15:22:30.000000000 +0200
+@@ -99,12 +99,15 @@
+ #include <linux/udp.h>
+ #endif
+ 
++int
++ipsec_tunnel_probe(struct net_device *dev);
++
+ static __u32 zeroes[64];
+ 
+ DEBUG_NO_STATIC int
+ ipsec_tunnel_open(struct net_device *dev)
+ {
+-	struct ipsecpriv *prv = dev->priv;
++	struct ipsecpriv *prv = netdev_priv(dev);
+ 	
+ 	/*
+ 	 * Can't open until attached.
+@@ -610,7 +613,7 @@
+ 	if (! ixs) {
+ 		struct ipsecpriv *prv;
+ 		struct net_device_stats *stats;
+-		prv = dev->priv;
++		prv = netdev_priv(dev);
+ 		stats = (struct net_device_stats *) &(prv->mystats);
+ 		stats->tx_dropped++;
+ 		goto alloc_error;
+@@ -661,7 +664,7 @@
+ DEBUG_NO_STATIC struct net_device_stats *
+ ipsec_tunnel_get_stats(struct net_device *dev)
+ {
+-	return &(((struct ipsecpriv *)(dev->priv))->mystats);
++	return &(((struct ipsecpriv *)netdev_priv(dev))->mystats);
+ }
+ 
+ /*
+@@ -673,7 +676,7 @@
+ ipsec_tunnel_hard_header(struct sk_buff *skb, struct net_device *dev,
+ 	unsigned short type, const void *daddr, const void *saddr, unsigned len)
+ {
+-	struct ipsecpriv *prv = dev->priv;
++	struct ipsecpriv *prv = netdev_priv(dev);
+ 	struct net_device *tmp;
+ 	int ret;
+ 	struct net_device_stats *stats;	/* This device's statistics */
+@@ -805,7 +808,7 @@
+ 			unsigned long raddr, struct sk_buff *skb)
+ #endif /* NET_21 */
+ {
+-	struct ipsecpriv *prv = skb->dev->priv;
++	struct ipsecpriv *prv = netdev_priv(skb->dev);
+ 	struct net_device *tmp;
+ 	int ret;
+ 	struct net_device_stats *stats;	/* This device's statistics */
+@@ -895,7 +898,7 @@
+ DEBUG_NO_STATIC int
+ ipsec_tunnel_set_mac_address(struct net_device *dev, void *addr)
+ {
+-	struct ipsecpriv *prv = dev->priv;
++	struct ipsecpriv *prv = netdev_priv(dev);
+ 	
+ 	struct net_device_stats *stats;	/* This device's statistics */
+ 	
+@@ -998,7 +1001,7 @@
+ ipsec_tunnel_cache_update(struct hh_cache *hh, const struct net_device *dev,
+ 				const unsigned char *  haddr)
+ {
+-	struct ipsecpriv *prv = dev->priv;
++	struct ipsecpriv *prv = netdev_priv(dev);
+ 	
+ 	struct net_device_stats *stats;	/* This device's statistics */
+ 	
+@@ -1099,7 +1102,7 @@
+ ipsec_tunnel_attach(struct net_device *dev, struct net_device *physdev)
+ {
+         int i;
+-	struct ipsecpriv *prv = dev->priv;
++	struct ipsecpriv *prv = netdev_priv(dev);
+ 
+ 	if(dev == NULL) {
+ 		KLIPS_PRINT(debug_tunnel & DB_TN_REVEC,
+@@ -1117,8 +1120,13 @@
+ 	}
+ 
+ 	prv->dev = physdev;
++#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,31)
+ 	prv->hard_start_xmit = physdev->hard_start_xmit;
+ 	prv->get_stats = physdev->get_stats;
++#else
++	prv->hard_start_xmit = physdev->netdev_ops->ndo_start_xmit;
++	prv->get_stats = physdev->netdev_ops->ndo_get_stats;
++#endif	
+ 
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,24)
+ 	if (physdev->header_ops) {
+@@ -1154,17 +1162,27 @@
+ 		dev->header_cache_update = NULL;
+ #endif
+ 	
++#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,31)
+ 	if (physdev->set_mac_address) {
+ 		prv->set_mac_address = physdev->set_mac_address;
+ 		dev->set_mac_address = ipsec_tunnel_set_mac_address;
+ 	} else
+ 		dev->set_mac_address = NULL;
++#else
++	if (physdev->netdev_ops->ndo_set_mac_address) {
++		prv->set_mac_address = physdev->netdev_ops->ndo_set_mac_address;
++		/* dev->set_mac_address = ipsec_tunnel_set_mac_address; */
++	} /* else
++		 dev->set_mac_address = NULL; */
++#endif
+ 
+ 	dev->hard_header_len = physdev->hard_header_len;
+ 
+ #ifdef NET_21
+ /*	prv->neigh_setup        = physdev->neigh_setup; */
++#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,31)
+ 	dev->neigh_setup        = ipsec_tunnel_neigh_setup_dev;
++#endif
+ #endif /* NET_21 */
+ 	dev->mtu = 16260; /* 0xfff0; */ /* dev->mtu; */
+ 	prv->mtu = physdev->mtu;
+@@ -1198,7 +1216,7 @@
+ ipsec_tunnel_detach(struct net_device *dev)
+ {
+         int i;
+-	struct ipsecpriv *prv = dev->priv;
++	struct ipsecpriv *prv = netdev_priv(dev);
+ 
+ 	if(dev == NULL) {
+ 		KLIPS_PRINT(debug_tunnel & DB_TN_REVEC,
+@@ -1287,7 +1305,7 @@
+ 	for(i = 0; i < IPSEC_NUM_IF; i++) {
+    	        ipsecdev = ipsecdevices[i];
+ 		if(ipsecdev != NULL) {
+-			if((prv = (struct ipsecpriv *)(ipsecdev->priv))) {
++			if((prv = (struct ipsecpriv *)netdev_priv(ipsecdev))) {
+ 				prvdev = (struct net_device *)(prv->dev);
+ 				if(prvdev) {
+ 					KLIPS_PRINT(debug_tunnel & DB_TN_INIT,
+@@ -1316,7 +1334,7 @@
+ ipsec_tunnel_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
+ {
+ 	struct ipsectunnelconf *cf = (struct ipsectunnelconf *)&ifr->ifr_data;
+-	struct ipsecpriv *prv = dev->priv;
++	struct ipsecpriv *prv = netdev_priv(dev);
+ 	struct net_device *them; /* physical device */
+ #ifdef CONFIG_IP_ALIAS
+ 	char *colon;
+@@ -1510,7 +1528,7 @@
+ 			ipsec_dev = ipsecdevices[i];
+ 
+ 			if(ipsec_dev) {
+-				priv = (struct ipsecpriv *)(ipsec_dev->priv);
++				priv = (struct ipsecpriv *)netdev_priv(ipsec_dev);
+ 				if(priv) {
+ 					;
+ 					if(((struct net_device *)(priv->dev)) == dev) {
+@@ -1594,6 +1612,24 @@
+ 	return NOTIFY_DONE;
+ }
+ 
++
++
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,31)
++static struct net_device_ops ipsec_tunnel_net_device_ops =
++{
++	.ndo_init		 =  ipsec_tunnel_probe,
++	.ndo_open		 = ipsec_tunnel_open,
++	.ndo_stop		 = ipsec_tunnel_close,
++	.ndo_start_xmit		 = ipsec_tunnel_start_xmit,
++	.ndo_do_ioctl		 = ipsec_tunnel_ioctl,
++	.ndo_neigh_setup         = ipsec_tunnel_neigh_setup_dev,
++	.ndo_set_mac_address	 = ipsec_tunnel_set_mac_address,
++	.ndo_get_stats		 = ipsec_tunnel_get_stats
++
++};
++#endif
++
++
+ /*
+  *	Called when an ipsec tunnel device is initialized.
+  *	The ipsec tunnel device structure is passed to us.
+@@ -1610,16 +1646,19 @@
+ 		    (unsigned long) sizeof(struct ipsecpriv),
+ 		    dev->name ? dev->name : "NULL");
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,31)
++	dev->netdev_ops = &ipsec_tunnel_net_device_ops;
++#else
+ 	/* Add our tunnel functions to the device */
+ 	dev->open		= ipsec_tunnel_open;
+ 	dev->stop		= ipsec_tunnel_close;
+ 	dev->hard_start_xmit	= ipsec_tunnel_start_xmit;
+ 	dev->get_stats		= ipsec_tunnel_get_stats;
+-
+-	dev->priv = kmalloc(sizeof(struct ipsecpriv), GFP_KERNEL);
+-	if (dev->priv == NULL)
+-		return -ENOMEM;
+-	memset((caddr_t)(dev->priv), 0, sizeof(struct ipsecpriv));
++#endif
++	//dev->priv = kmalloc(sizeof(struct ipsecpriv), GFP_KERNEL);
++	//if (dev->priv == NULL)
++	//	return -ENOMEM;
++	//memset((caddr_t)(dev->priv), 0, sizeof(struct ipsecpriv));
+ 
+ 	for(i = 0; i < sizeof(zeroes); i++) {
+ 		((__u8*)(zeroes))[i] = 0;
+@@ -1631,8 +1670,10 @@
+ 		skb_queue_head_init(&dev->buffs[i]);
+ #endif /* !NET_21 */
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,31)
+ 	dev->set_multicast_list = NULL;
+ 	dev->do_ioctl		= ipsec_tunnel_ioctl;
++#endif
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,24)
+ 	dev->header_ops		= NULL;
+ #else
+@@ -1647,7 +1688,9 @@
+ 
+ #ifdef NET_21
+ /*	prv->neigh_setup        = NULL; */
++#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,31)
+ 	dev->neigh_setup        = ipsec_tunnel_neigh_setup_dev;
++#endif
+ #endif /* NET_21 */
+ 	dev->hard_header_len 	= 0;
+ 	dev->mtu		= 0;
+@@ -1677,6 +1720,7 @@
+ #ifdef alloc_netdev
+ static void ipsec_tunnel_netdev_setup(struct net_device *dev)
+ {
++	ipsec_tunnel_probe(dev);
+ }
+ #endif
+ 
+@@ -1711,7 +1755,7 @@
+ 
+ 	sprintf(name, IPSEC_DEV_FORMAT, ifnum);
+ #ifdef alloc_netdev
+-	dev_ipsec = alloc_netdev(0, name, ipsec_tunnel_netdev_setup);
++	dev_ipsec = alloc_netdev(sizeof(struct ipsecpriv), name, ipsec_tunnel_netdev_setup);
+ #else
+ 	dev_ipsec = (struct net_device*)kmalloc(sizeof(struct net_device), GFP_KERNEL);
+ #endif
+@@ -1741,7 +1785,13 @@
+ 	dev_ipsec->next = NULL;
+ #endif
+ #endif /* alloc_netdev */
++
++#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,31)
+ 	dev_ipsec->init = &ipsec_tunnel_probe;
++#else
++	dev_ipsec->netdev_ops = &ipsec_tunnel_net_device_ops;
++	//dev_ipsec->init = &ipsec_tunnel_probe;
++#endif
+ 	KLIPS_PRINT(debug_tunnel & DB_TN_INIT,
+ 		    "klips_debug:ipsec_tunnel_init_devices: "
+ 		    "registering device %s\n",
+@@ -1818,9 +1868,9 @@
+ 	kfree(dev_ipsec->name);
+ 	dev_ipsec->name=NULL;
+ #endif /* !NETDEV_23 */
+-	kfree(dev_ipsec->priv);
++	//kfree(dev_ipsec->priv);
+ #endif /* alloc_netdev */
+-	dev_ipsec->priv=NULL;
++	//dev_ipsec->priv=NULL;
+ 
+ 	return 0;
+ }
+@@ -1871,9 +1921,9 @@
+ 		kfree(dev_ipsec->name);
+ 		dev_ipsec->name=NULL;
+ #endif /* !NETDEV_23 */
+-		kfree(dev_ipsec->priv);
++		//kfree(dev_ipsec->priv);
+ #endif /* alloc_netdev */
+-		dev_ipsec->priv=NULL;
++		//dev_ipsec->priv=NULL;
+ 	}
+ 	return error;
+ }
+diff -Nur openswan-2.6.21/linux/net/ipsec/ipsec_xmit.c openswan-2.6.21.patched/linux/net/ipsec/ipsec_xmit.c
+--- openswan-2.6.21/linux/net/ipsec/ipsec_xmit.c	2009-03-30 16:11:28.000000000 +0300
++++ openswan-2.6.21.patched/linux/net/ipsec/ipsec_xmit.c	2009-10-21 15:23:40.000000000 +0200
+@@ -100,7 +100,7 @@
+  * and SuSE has one with one parameter, but no way of checking to
+  * see what is really what.
+  */
+-
++#ifndef KLIPS_IP_SELECT_IDENT
+ #ifdef SUSE_LINUX_2_4_19_IS_STUPID
+ #define KLIPS_IP_SELECT_IDENT(iph, skb) ip_select_ident(iph)
+ #else
+@@ -117,11 +117,11 @@
+ 
+ /* kernels > 2.4.2 */
+ #if defined(IP_SELECT_IDENT) && defined(IP_SELECT_IDENT_NEW)
+-#define KLIPS_IP_SELECT_IDENT(iph, skb) ip_select_ident(iph, skb->dst, NULL)
++#define KLIPS_IP_SELECT_IDENT(iph, skb) ip_select_ident(iph, skb_dst(skb), NULL)
+ #endif
+ 
+ #endif /* SUSE_LINUX_2_4_19_IS_STUPID */
+-
++#endif
+ 
+ 
+ #if defined(CONFIG_KLIPS_AH)
+@@ -425,7 +425,7 @@
+ 		return IPSEC_XMIT_NODEV;
+ 	}
+ 
+-	ixs->prv = ixs->dev->priv;
++	ixs->prv = netdev_priv(ixs->dev);
+ 	if (ixs->prv == NULL) {
+ 		KLIPS_PRINT(debug_tunnel & DB_TN_XMIT,
+ 			    "klips_error:ipsec_xmit_sanity_check_dev: "
+@@ -2037,8 +2037,8 @@
+ 		return IPSEC_XMIT_RECURSDETECT;
+ 	}
+ 
+-	dst_release(ixs->skb->dst);
+-	ixs->skb->dst = &ixs->route->u.dst;
++	dst_release(skb_dst(ixs->skb));
++	skb_dst_set(ixs->skb,&ixs->route->u.dst);
+ 	if(ixs->stats) {
+ 		ixs->stats->tx_bytes += ixs->skb->len;
+ 	}
+diff -Nur openswan-2.6.21/linux/net/ipsec/pfkey_v2.c openswan-2.6.21.patched/linux/net/ipsec/pfkey_v2.c
+--- openswan-2.6.21/linux/net/ipsec/pfkey_v2.c	2009-03-30 16:11:28.000000000 +0300
++++ openswan-2.6.21.patched/linux/net/ipsec/pfkey_v2.c	2009-10-19 09:49:58.000000000 +0200
+@@ -492,7 +492,7 @@
+ 			printk(" h:0p%p", skb_transport_header(skb));
+ 			printk(" nh:0p%p", skb_network_header(skb));
+ 			printk(" mac:0p%p", skb_mac_header(skb));
+-			printk(" dst:0p%p", skb->dst);
++			printk(" dst:0p%p", skb_dst(skb));
+ 			if(sysctl_ipsec_debug_verbose) {
+ 				int i;
+ 				
+@@ -672,7 +672,7 @@
+ 		return -EPROTONOSUPPORT;
+ 	}
+ 
+-	if((current->uid != 0)) {
++	if((current_uid() != 0)) {
+ 		KLIPS_PRINT(debug_pfkey,
+ 			    "klips_debug:pfkey_create: "
+ 			    "must be root to open pfkey sockets.\n");
+@@ -872,7 +872,7 @@
+ 		SENDERR(-error);
+ 	}
+ 
+-	if((current->uid != 0)) {
++	if((current_uid() != 0)) {
+ 		KLIPS_PRINT(debug_pfkey,
+ 			    "klips_debug:pfkey_sendmsg: "
+ 			    "must be root to send messages to pfkey sockets.\n");
+diff -Nur openswan-2.6.21/packaging/linus/config-all.h openswan-2.6.21.patched/packaging/linus/config-all.h
+--- openswan-2.6.21/packaging/linus/config-all.h	2009-03-30 16:11:28.000000000 +0300
++++ openswan-2.6.21.patched/packaging/linus/config-all.h	2009-07-12 16:41:04.000000000 +0300
+@@ -22,9 +22,11 @@
+ #define CONFIG_KLIPS_AH 1
+ #endif
+ 
++#if 0
+ #ifndef CONFIG_KLIPS_DEBUG 
+ #define CONFIG_KLIPS_DEBUG 1
+ #endif
++#endif
+ 
+ #ifndef CONFIG_KLIPS_ESP
+ #define CONFIG_KLIPS_ESP 1
+@@ -72,13 +74,12 @@
+ #define CONFIG_KLIPS_ALG_CRYPTOAPI #error
+ #define CONFIG_KLIPS_ALG_AES #error
+ 
+-#if 0
+-/* off by default requiers kernel patch */
++
+ #ifndef CONFIG_KLIPS_OCF
+-#define CONFIG_KLIPS_OCF 0
+-#endif
++#define CONFIG_KLIPS_OCF 1
+ #endif
+ 
++
+ #ifndef CONFIG_KLIPS_ALG_AES_MAC
+ #define CONFIG_KLIPS_ALG_AES_MAC 1
+ #endif
+diff -Nur openswan-2.6.21/packaging/makefiles/module.defs openswan-2.6.21.patched/packaging/makefiles/module.defs
+--- openswan-2.6.21/packaging/makefiles/module.defs	2009-03-30 16:11:28.000000000 +0300
++++ openswan-2.6.21.patched/packaging/makefiles/module.defs	2009-07-12 16:41:04.000000000 +0300
+@@ -1,5 +1,7 @@
+ # To config as static (preferred), 'y'.  To config as module, 'm'.
+-CONFIG_KLIPS=m
++CONFIG_KLIPS=y
++
++CONFIG_KLIPS_OCF=y
+ 
+ # To enable authentication without encryption, say 'y'.   (Not so recommended)
+ CONFIG_KLIPS_AH=y

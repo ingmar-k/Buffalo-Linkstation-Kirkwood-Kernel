@@ -1,0 +1,226 @@
+menu "BUFFALO Features"
+
+# COMMON
+config BUFFALO_PLATFORM
+	bool "BUFFALO_PLATFORM"
+	---help---
+	  Hardware/Software is BUFFALO platfrom
+
+config BUFFALO_USE_KERNEVNT
+	bool "BUFFALO_USE_KERNEVNT"
+	depends on BUFFALO_PLATFORM
+	---help---
+	  Use kernelevent
+
+config BUFFALO_USE_MD_KERNEVNT
+	bool "BUFFALO_USE_MD_KERNEVNT"
+	depends on BUFFALO_PLATFORM
+	depends on BUFFALO_USE_KERNEVNT
+	---help---
+	  Use kernelevent of md driver.
+
+config BUFFALO_USE_MD_DEGRADE_KERNEVNT
+	bool "BUFFALO_USE_MD_DEGRADE_KERNEVNT"
+	depends on BUFFALO_PLATFORM
+	depends on BUFFALO_USE_MD_KERNEVNT
+	---help---
+	  Use kernelevent of md driver.
+
+config BUFFALO_USE_MD_SCAN_KERNEVNT
+	bool "BUFFALO_USE_MD_SCAN_KERNEVNT"
+	depends on BUFFALO_PLATFORM
+	depends on BUFFALO_USE_MD_KERNEVNT
+	---help---
+	  Use kernelevent of md driver.
+
+config BUFFALO_USE_MD_REBUILD_KERNEVNT
+	bool "BUFFALO_USE_MD_REBUILD_KERNEVNT"
+	depends on BUFFALO_PLATFORM
+	depends on BUFFALO_USE_MD_KERNEVNT
+	---help---
+	  Use kernelevent of md driver.
+
+config BUFFALO_USE_MTD_KERNEVNT
+	bool "BUFFALO_USE_MTD_KERNEVNT"
+	depends on BUFFALO_PLATFORM
+	depends on BUFFALO_USE_KERNEVNT
+	---help---
+	  Use kernelevent of md driver.
+
+config BUFFALO_ERRCNT
+	bool "BUFFALO_ERRCNT"
+	depends on BUFFALO_PLATFORM
+	depends on BUFFALO_IOERRS
+	---help---
+	disk I/O error counter and auto MD degrading.	 
+
+config BUFFALO_USE_UPS
+	bool "BUFFALO_USE_UPS"
+	depends on BUFFALO_PLATFORM
+	---help---
+	Enable kernel support of ups shutdown.
+
+
+config BUFFALO_DUPLICATE_SUPERBLOCK
+	bool "BUFFALO_DUPLICATE_SUPERBLOCK"
+	depends on BUFFALO_PLATFORM
+	---help---
+	  enable duplicate superblock.
+
+config BUFFALO_DUPLICATE_SUPERBLOCK_DEBUG
+	bool "BUFFALO_DUPLICATE_SUPERBLOCK_DEBUG"
+	depends on BUFFALO_DUPLICATE_SUPERBLOCK
+	---help---
+	  enable duplicate superblock debug mode.
+
+config BUFFALO_UBOOT_PARAMS
+	bool "BUFFALO_UBOOT_PARAMS"
+	depends on BUFFALO_PLATFORM
+	---help---
+	  add u-boot parameters
+
+config BUFFALO_IOERRS
+	bool "BUFFALO_IOERRS"
+	depends on BUFFALO_PLATFORM
+	---help---
+	  disk I/O error counter
+
+config BUFFALO_DISABLE_NCQ
+	bool "BUFFALO_DISABLE_NCQ"
+	depends on BUFFALO_PLATFORM
+	---help---
+	  disable NCQ
+
+config BUFFALO_SKIP_RESYNC
+	bool "BUFFALO_SKIP_RESYNC"
+	depends on BUFFALO_PLATFORM
+	---help---
+	  skip resync of md device
+
+config BUFFALO_IGNORE_LUN
+	bool "BUFFALO_IGNORE_LUN"
+	depends on BUFFALO_PLATFORM
+	---help---
+	  ignore lun of SCSI device
+
+config BUFFALO_SCSI_GUID
+	bool "BUFFALO_SCSI_GUID"
+	depends on BUFFALO_PLATFORM
+	---help---
+	  add guid of SCSI device
+
+config BUFFALO_EXT23_EXTENSION
+	bool "BUFFALO_EXT23_EXTENSION"
+	depends on BUFFALO_PLATFORM
+	---help---
+	  extend ext2/ext3 magic number
+
+config BUFFALO_SATA_RECONNECT
+	bool "BUFFALO_SATA_RECONNECT"
+	depends on BUFFALO_PLATFORM
+	---help---
+	  reconnect sata when failed
+
+# X86
+config BUFFALO_MATSU_PLATFORM
+	bool "MATSU_PLATFORM"
+	depends on BUFFALO_PLATFORM
+	depends on X86
+	---help---
+	  Enable hdd control driver / button control driver for matsu platform.
+
+config BUFFALO_MATSU_USE_EVT_BOARD
+	bool "MATSU_EVT_BOARD"
+	depends on BUFFALO_MATSU_PLATFORM
+	---help---
+	  EVT board and DVT board has difference for GPIO pin.
+	  If this value set to enable, use EVT GPIO settings.
+
+config BUFFALO_KIRI_PLATFORM
+	bool "KIRI_PLATFORM"
+	depends on BUFFALO_PLATFORM
+	depends on X86
+	---help---
+	  Enable hdd control driver / button control driver for kiri platform.
+
+
+# ARM
+config USE_RS5C372
+	bool "USE RTC chip RS5C372"
+	depends on BUFFALO_PLATFORM
+	depends on ARM
+	---help---
+	  BUFFALO  arch/arm/mach-mv88fxx81/Board/rtc/mvDS1339Reg.h.c
+
+config BUFFALO_USE_MICON
+	bool "USE MICON control"
+	depends on BUFFALO_PLATFORM
+	depends on ARM
+	---help---
+	  BUFFALO  buffalo/drivers
+
+config BUFFALO_USE_INTERRUPT_DRIVER
+	bool "USE interrupt driver"
+	depends on BUFFALO_PLATFORM
+	depends on ARM
+	---help---
+	  BUFFALO buffalo/drivers
+
+config BUFFALO_USE_GPIO_DRIVER
+	bool "USE gpio driver"
+	depends on BUFFALO_PLATFORM
+	depends on ARM
+	---help---
+	  BUFFALO buffalo/drivers
+	  Only use for miconless models.
+
+config BUFFALO_SUPPORT_BOARD_INFO
+	bool "support board info from kernel"
+	depends on BUFFALO_PLATFORM
+	depends on ARM
+	---help---
+	  BUFFALO  buffalo/drivers
+
+config BUFFALO_SATA_HOTPLUG_EVENT
+	bool "support SATA HOTPLUG EVENT"
+	depends on BUFFALO_PLATFORM
+	depends on ARM
+
+config BUFFALO_USE_AES_DRIVER
+	bool "BUFFALO_USE_AES_DRIVER"
+	depends on BUFFALO_PLATFORM
+	depends on ARM
+	---help---
+	  Use aes driver. PacketVideo made for DTCP-IP.
+
+config BUFFALO_NTFS_CPU32_FIX
+	bool "BUFFALO_NTFS_CPU32_FIX"
+	depends on BUFFALO_PLATFORM
+	depends on ARM
+	---help---
+	  Experimental. Over 2TB NTFS HDD support.
+
+config BUFFALO_NOT_IMPLEMENTED_NAND_FLASH_DETECT_FIX
+	bool "BUFFALO_NOT_IMPLEMENTED_NAND_FLASH_DETECT_FIX"
+	depends on BUFFALO_PLATFORM
+	---help---
+          Fix NAND flash memory detection routines.
+          In the configuration NAND flash memory has been installed, 
+          for if the flash memory has not been implemented.
+          (such as LS-WX Series)
+
+config BUFFALO_LSWX_ENABLE_NAND_FLASH
+	bool "BUFFALO_LSWX_ENABLE_NAND_FLASH"
+	depends on BUFFALO_PLATFORM
+	select BUFFALO_NOT_IMPLEMENTED_NAND_FLASH_DETECT_FIX
+	---help---
+	  LS-WX Serires Use NAND Flash.
+
+config BUFFALO_RTC_EXPANSION
+	bool "BUFFALO_RTC_EXPANSION"
+	depends on BUFFALO_PLATFORM
+	---help---
+	  rtc date register MSB using another purpose.
+
+endmenu
+

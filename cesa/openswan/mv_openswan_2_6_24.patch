@@ -1,0 +1,266 @@
+--- openswan-2.6.24/linux/include/openswan/ipsec_param.h	2010-01-10 03:34:38.000000000 +0200
++++ openswan-2.6.24/linux/include/openswan/ipsec_param.h	2010-02-10 12:10:27.000000000 +0200
+@@ -179,6 +179,7 @@
+ /*
+  * debugging routines.
+  */
++#ifdef CONFIG_KLIPS_DEBUG
+         #define KLIPS_ERROR(flag, format, args...) if(printk_ratelimit() || flag) printk(KERN_ERR "KLIPS " format, ## args)
+ 	#define KLIPS_PRINT(flag, format, args...) \
+ 		((flag) ? printk(KERN_INFO format , ## args) : 0)
+@@ -188,7 +189,8 @@
+ 		((flag) ? ipsec_print_ip(ip) : 0)
+ 	#define KLIPS_SATOT(flag, sa, format, dst, dstlen) \
+ 		((flag) ? satot(sa, format, dst, dstlen) : 0)
+-#if 0 /* not CONFIG_KLIPS_DEBUG */
++#else 
++//#if 0 /* not CONFIG_KLIPS_DEBUG */
+         #define KLIPS_ERROR(flag, format, args...) if(printk_ratelimit()) printk(KERN_ERR "KLIPS " format, ## args)
+ 	#define KLIPS_PRINT(flag, format, args...) do ; while(0)
+ 	#define KLIPS_PRINTMORE(flag, format, args...) do ; while(0)
+--- openswan-2.6.24/linux/net/ipsec/defconfig	2010-01-10 03:34:38.000000000 +0200
++++ openswan-2.6.24/linux/net/ipsec/defconfig	2010-02-10 12:02:32.000000000 +0200
+@@ -59,5 +59,5 @@
+ CONFIG_KLIPS_DEBUG=y
+ 
+ # OCF HW offloading, requires kernel patch
+-# CONFIG_KLIPS_OCF is not set
++CONFIG_KLIPS_OCF=y
+ 
+--- openswan-2.6.24/linux/net/ipsec/ipsec_tunnel.c	2010-01-10 03:34:38.000000000 +0200
++++ openswan-2.6.24/linux/net/ipsec/ipsec_tunnel.c	2010-02-10 12:18:15.000000000 +0200
+@@ -104,9 +104,9 @@
+ DEBUG_NO_STATIC int ipsec_tunnel_detach(struct net_device *dev);
+ extern const struct net_device_ops klips_device_ops;
+ 
+-#ifdef CONFIG_KLIPS_DEBUG
++//#ifdef CONFIG_KLIPS_DEBUG
+ int debug_tunnel = 0;
+-#endif /* CONFIG_KLIPS_DEBUG */
++//#endif /* CONFIG_KLIPS_DEBUG */
+ 
+ DEBUG_NO_STATIC int
+ ipsec_tunnel_open(struct net_device *dev)
+--- openswan-2.6.24/packaging/linus/config-all.h	2010-01-10 03:34:38.000000000 +0200
++++ openswan-2.6.24/packaging/linus/config-all.h	2010-02-10 11:06:22.000000000 +0200
+@@ -22,9 +22,11 @@
+ #define CONFIG_KLIPS_AH 1
+ #endif
+ 
++#if 0
+ #ifndef CONFIG_KLIPS_DEBUG 
+ #define CONFIG_KLIPS_DEBUG 1
+ #endif
++#endif
+ 
+ #ifndef CONFIG_KLIPS_ESP
+ #define CONFIG_KLIPS_ESP 1
+@@ -78,6 +80,7 @@
+ #define CONFIG_KLIPS_OCF 0
+ #endif
+ #endif
++#define CONFIG_KLIPS_OCF 1
+ 
+ #ifndef CONFIG_KLIPS_ALG_AES_MAC
+ #define CONFIG_KLIPS_ALG_AES_MAC 1
+--- openswan-2.6.24/packaging/makefiles/module.defs	2010-01-10 03:34:38.000000000 +0200
++++ openswan-2.6.24/packaging/makefiles/module.defs	2010-02-10 11:54:13.000000000 +0200
+@@ -37,7 +37,7 @@
+ CONFIG_KLIPS_IPCOMP=y
+ 
+ # To enable userspace-switchable KLIPS debugging, say 'y'.
+-CONFIG_KLIPS_DEBUG=y
++CONFIG_KLIPS_DEBUG=n
+ 
+ #
+ #
+--- openswan-2.6.24/linux/net/ipsec/ipsec_mast.c.orig	2010-02-10 12:23:35.000000000 +0200
++++ openswan-2.6.24/linux/net/ipsec/ipsec_mast.c	2010-02-10 12:23:47.000000000 +0200
+@@ -700,6 +700,9 @@
+ 	dev->addr_len		= 0;
+ 	dev->type		= ARPHRD_NONE;
+ 	dev->tx_queue_len	= 10;		
++#ifdef IFF_XMIT_DST_RELEASE
++	dev->priv_flags	       &= ~IFF_XMIT_DST_RELEASE;
++#endif
+ 	memset((caddr_t)(dev->broadcast),0xFF, ETH_ALEN);	/* what if this is not attached to ethernet? */
+ 
+ 	/* New-style flags. */
+--- openswan-2.6.24/linux/net/ipsec/ipsec_tunnel.c.orig	2010-02-10 12:18:15.000000000 +0200
++++ openswan-2.6.24/linux/net/ipsec/ipsec_tunnel.c	2010-02-10 12:23:47.000000000 +0200
+@@ -1840,6 +1840,9 @@
+ 	dev->addr_len		= 0;
+ 	dev->type		= ARPHRD_VOID; /* ARPHRD_TUNNEL; */ /* ARPHRD_ETHER; */
+ 	dev->tx_queue_len	= 10;		/* Small queue */
++#ifdef IFF_XMIT_DST_RELEASE
++	dev->priv_flags	       &= ~IFF_XMIT_DST_RELEASE;
++#endif
+ 	memset((caddr_t)(dev->broadcast),0xFF, ETH_ALEN);	/* what if this is not attached to ethernet? */
+ 
+ 	/* New-style flags. */
+--- openswan-2.6.24/linux/net/ipsec/ipsec_tunnel.c	2010-02-10 10:33:28.000000000 +0200
++++ openswan-2.6.24/linux/net/ipsec/ipsec_tunnel.c	2010-02-10 10:33:53.000000000 +0200
+@@ -1791,7 +1791,9 @@
+ 		    (unsigned long) sizeof(struct ipsecpriv),
+ 		    dev->name ? dev->name : "NULL");
+ 
++#ifdef alloc_netdev
+ 	dev->destructor         = free_netdev;
++#endif
+ 
+ #ifndef HAVE_NETDEV_PRIV
+ 	{
+@@ -2004,13 +2006,11 @@
+ 		    atomic_read(&dev_ipsec->refcnt));
+ 	unregister_netdev(dev_ipsec);
+ 	KLIPS_PRINT(debug_tunnel, "Unregisted %s\n", dev_ipsec->name);
+-#ifdef alloc_netdev
+-	free_netdev(dev_ipsec);
+-#else
+ #ifndef NETDEV_23
+ 	kfree(dev_ipsec->name);
+ 	dev_ipsec->name=NULL;
+ #endif /* !NETDEV_23 */
++#ifndef alloc_netdev
+ 	kfree(dev_ipsec->priv);
+ 	dev_ipsec->priv=NULL;
+ #endif /* alloc_netdev */
+@@ -2057,13 +2057,11 @@
+ 			    atomic_read(&dev_ipsec->refcnt));
+ 		unregister_netdev(dev_ipsec);
+ 		KLIPS_PRINT(debug_tunnel, "Unregisted %s\n", dev_ipsec->name);
+-#ifdef alloc_netdev
+-		free_netdev(dev_ipsec);
+-#else
+ #ifndef NETDEV_23
+ 		kfree(dev_ipsec->name);
+ 		dev_ipsec->name=NULL;
+ #endif /* !NETDEV_23 */
++#ifndef alloc_netdev
+ 		kfree(dev_ipsec->priv);
+ 		dev_ipsec->priv=NULL;
+ #endif /* alloc_netdev */
+From: David McCullough <david_mccullough@securecomputing.com>
+Date: Wed, 3 Feb 2010 05:26:26 +0000 (+1000)
+Subject: Fix KLIPS_IP_SELECT_IDENT usage on newer kernels
+X-Git-Url: http://git.openswan.org/cgi-bin/gitweb.cgi?p=openswan.public%2F.git;a=commitdiff_plain;h=e5b4fa6375f93ae9d9a90f2f45e7fdc54193eeac
+
+Fix KLIPS_IP_SELECT_IDENT usage on newer kernels
+
+Make sure we have the skb->dst in place (ip_route'd) before we call
+ip_select_ident (KLIPS_IP_SELECT_IDENT) otherwise we get kernel trace
+to say things are less than ideal and performance is killed.
+
+Also cleanup KLIPS_IP_SELECT_IDENT definitions.  It's also in ipsec_param2.h
+but it really should be moved ipsec_kversion IMHO.
+---
+
+diff --git a/linux/net/ipsec/ipsec_ipip.c b/linux/net/ipsec/ipsec_ipip.c
+index 70f8015..15210ed 100644
+--- a/linux/net/ipsec/ipsec_ipip.c
++++ b/linux/net/ipsec/ipsec_ipip.c
+@@ -92,8 +92,6 @@ ipsec_xmit_ipip_setup(struct ipsec_xmit_state *ixs)
+   ixs->iph->protocol = IPPROTO_IPIP;
+   ixs->iph->ihl      = sizeof(struct iphdr) >> 2;
+   
+-  KLIPS_IP_SELECT_IDENT(ixs->iph, ixs->skb);
+-  
+   ixs->newdst = (__u32)ixs->iph->daddr;
+   ixs->newsrc = (__u32)ixs->iph->saddr;
+   
+diff --git a/linux/net/ipsec/ipsec_xmit.c b/linux/net/ipsec/ipsec_xmit.c
+index 1c10b10..f4a0b51 100644
+--- a/linux/net/ipsec/ipsec_xmit.c
++++ b/linux/net/ipsec/ipsec_xmit.c
+@@ -95,37 +95,6 @@
+ #include "openswan/ipsec_alg.h"
+ #include "ipsec_ocf.h"
+ 
+-
+-/* 
+- * Stupid kernel API differences in APIs. Not only do some
+- * kernels not have ip_select_ident, but some have differing APIs,
+- * and SuSE has one with one parameter, but no way of checking to
+- * see what is really what.
+- */
+-
+-#ifdef SUSE_LINUX_2_4_19_IS_STUPID
+-#define KLIPS_IP_SELECT_IDENT(iph, skb) ip_select_ident(iph)
+-#else
+-
+-/* simplest case, nothing */
+-#if !defined(IP_SELECT_IDENT)
+-#define KLIPS_IP_SELECT_IDENT(iph, skb)  do { iph->id = htons(ip_id_count++); } while(0)
+-#endif
+-
+-/* kernels > 2.3.37-ish */
+-#if defined(IP_SELECT_IDENT) && !defined(IP_SELECT_IDENT_NEW)
+-#define KLIPS_IP_SELECT_IDENT(iph, skb) ip_select_ident(iph, skb->dst)
+-#endif
+-
+-/* kernels > 2.4.2 */
+-#if defined(IP_SELECT_IDENT) && defined(IP_SELECT_IDENT_NEW)
+-#define KLIPS_IP_SELECT_IDENT(iph, skb) ip_select_ident(iph, skb_dst(skb), NULL)
+-#endif
+-
+-#endif /* SUSE_LINUX_2_4_19_IS_STUPID */
+-
+-
+-
+ #if defined(CONFIG_KLIPS_AH)
+ #if defined(CONFIG_KLIPS_AUTH_HMAC_MD5) || defined(CONFIG_KLIPS_AUTH_HMAC_SHA1)
+ static __u32 zeroes[64];
+@@ -1004,8 +973,6 @@ ipsec_xmit_ipip(struct ipsec_xmit_state *ixs)
+ 	ixs->iph->protocol = IPPROTO_IPIP;
+ 	ixs->iph->ihl      = sizeof(struct iphdr) >> 2;
+ 
+-	KLIPS_IP_SELECT_IDENT(ixs->iph, ixs->skb);
+-
+ 	ixs->newdst = (__u32)ixs->iph->daddr;
+ 	ixs->newsrc = (__u32)ixs->iph->saddr;
+ 	
+@@ -1079,8 +1046,16 @@ ipsec_xmit_cont(struct ipsec_xmit_state *ixs)
+ #else /* NET_21 */
+ 	ixs->skb->ip_hdr = ixs->skb->h.iph = (struct iphdr *) ixs->skb->data;
+ #endif /* NET_21 */
+-	ixs->iph->check = 0;
+-	ixs->iph->check = ip_fast_csum((unsigned char *)ixs->iph, ixs->iph->ihl);
++
++	/*
++	 * if we have more work to do,  it's likely this checksum is getting
++	 * encapsulated,  and we must do it.  Otherwise,  we do a final one
++	 * just before the ip_send/nf hook in ipsec_xmit_send.
++	 */
++	if (ixs->ipsp->ips_next) {
++		ixs->iph->check = 0;
++		ixs->iph->check = ip_fast_csum((unsigned char *)ixs->iph, ixs->iph->ihl);
++	}
+ 			
+ 	KLIPS_PRINT(debug_tunnel & DB_TN_XMIT,
+ 		    "klips_debug:ipsec_xmit_encap_once: "
+@@ -2065,6 +2040,14 @@ ipsec_xmit_send(struct ipsec_xmit_state*ixs, struct flowi *fl)
+ 		ipsec_nf_reset(ixs->skb);
+ 	}
+ 
++	/* newer kernels require skb->dst to be set in KLIPS_IP_SELECT_IDENT */
++	KLIPS_IP_SELECT_IDENT(ip_hdr(ixs->skb), ixs->skb);
++
++	/* fix up the checksum after changes to the header */
++	ip_hdr(ixs->skb)->check = 0;
++	ip_hdr(ixs->skb)->check =
++		ip_fast_csum((unsigned char *)ip_hdr(ixs->skb), ip_hdr(ixs->skb)->ihl);
++
+ 	KLIPS_PRINT(debug_tunnel & DB_TN_XMIT,
+ 		    "klips_debug:ipsec_xmit_send: "
+ 		    "...done, calling ip_send() on device:%s\n",
+--- a/Makefile.inc	2010-02-15 10:14:21.000000000 +0200
++++ b/Makefile.inc	2010-02-15 10:14:36.000000000 +0200
+@@ -395,7 +395,7 @@
+ HAVE_OPENSSL?=false
+ 
+ # Do we have OCF available?
+-HAVE_OCF?=false
++HAVE_OCF=true
+ 
+ # Do we assume that the /bin/sh is BASH?
+ # if so, then internationalization code is retained in the shell scripts

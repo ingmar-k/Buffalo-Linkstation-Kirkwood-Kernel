@@ -1,0 +1,61 @@
+diff -Nru ethtool-6/ethtool.c ethtool-6-mrv/ethtool.c
+--- ethtool-6/ethtool.c	2007-07-26 20:22:06.000000000 +0300
++++ ethtool-6-mrv/ethtool.c	2009-03-29 08:37:17.000000000 +0300
+@@ -1015,6 +1015,7 @@
+ 	{ "sky2", sky2_dump_regs },
+         { "vioc", vioc_dump_regs },
+         { "smsc911x", smsc911x_dump_regs },
++        { "mv_eth", mv_eth_dump_regs },
+ };
+ 
+ static int dump_regs(struct ethtool_drvinfo *info, struct ethtool_regs *regs)
+diff -Nru ethtool-6/ethtool-util.h ethtool-6-mrv/ethtool-util.h
+--- ethtool-6/ethtool-util.h	2007-07-26 20:31:30.000000000 +0300
++++ ethtool-6-mrv/ethtool-util.h	2009-03-29 08:39:17.000000000 +0300
+@@ -69,4 +69,7 @@
+ /* SMSC LAN911x/LAN921x embedded ethernet controller */
+ int smsc911x_dump_regs(struct ethtool_drvinfo *info, struct ethtool_regs *regs);
+ 
++/* Marvell embedded ethernet controller */
++int mv_eth_dump_regs(struct ethtool_drvinfo *info, struct ethtool_regs *regs);
++
+ #endif
+diff -Nru ethtool-6/marvell.c ethtool-6-mrv/marvell.c
+--- ethtool-6/marvell.c	2007-07-26 20:22:06.000000000 +0300
++++ ethtool-6-mrv/marvell.c	2009-03-29 08:38:46.000000000 +0300
+@@ -431,3 +431,35 @@
+ 
+ 	return 0;
+ }
++
++int mv_eth_dump_regs(struct ethtool_drvinfo *info, struct ethtool_regs *regs)
++{
++    u32 *regs_buff = (u32 *)regs->data;
++
++    fprintf(stdout, "\n\t ethGiga port Registers:");
++    fprintf(stdout, "\n\t -----------------------\n");
++
++    fprintf(stdout, "ETH_PORT_STATUS_REG                 : 0x%08x\n", regs_buff[0]);
++    fprintf(stdout, "ETH_PORT_SERIAL_CTRL_REG            : 0x%08x\n", regs_buff[1]);
++    fprintf(stdout, "ETH_PORT_CONFIG_REG                 : 0x%08x\n", regs_buff[2]);
++    fprintf(stdout, "ETH_PORT_CONFIG_EXTEND_REG          : 0x%08x\n", regs_buff[3]);
++    fprintf(stdout, "ETH_SDMA_CONFIG_REG                 : 0x%08x\n", regs_buff[4]);
++    fprintf(stdout, "ETH_TX_FIFO_URGENT_THRESH_REG       : 0x%08x\n", regs_buff[5]);
++    fprintf(stdout, "ETH_RX_QUEUE_COMMAND_REG            : 0x%08x\n", regs_buff[6]);
++    fprintf(stdout, "ETH_TX_QUEUE_COMMAND_REG            : 0x%08x\n", regs_buff[7]);
++    fprintf(stdout, "ETH_INTR_CAUSE_REG                  : 0x%08x\n", regs_buff[8]);
++    fprintf(stdout, "ETH_INTR_EXTEND_CAUSE_REG           : 0x%08x\n", regs_buff[9]);
++    fprintf(stdout, "ETH_INTR_MASK_REG                   : 0x%08x\n", regs_buff[10]);
++    fprintf(stdout, "ETH_INTR_EXTEND_MASK_REG            : 0x%08x\n", regs_buff[11]);
++    fprintf(stdout, "ETH_RX_DESCR_STAT_CMD_REG           : 0x%08x\n", regs_buff[12]);
++    fprintf(stdout, "ETH_RX_BYTE_COUNT_REG               : 0x%08x\n", regs_buff[13]);
++    fprintf(stdout, "ETH_RX_BUF_PTR_REG                  : 0x%08x\n", regs_buff[14]);
++    fprintf(stdout, "ETH_RX_CUR_DESC_PTR_REG             : 0x%08x\n", regs_buff[15]);
++    fprintf(stdout, "ETH_PHY_ADDR_REG                    : 0x%08x\n", regs_buff[16]);
++    fprintf(stdout, "ETH_UNIT_INTR_CAUSE_REG             : 0x%08x\n", regs_buff[17]);
++    fprintf(stdout, "ETH_UNIT_INTR_MASK_REG              : 0x%08x\n", regs_buff[18]);
++    fprintf(stdout, "ETH_UNIT_ERROR_ADDR_REG             : 0x%08x\n", regs_buff[19]);
++    fprintf(stdout, "ETH_UNIT_INT_ADDR_ERROR_REG         : 0x%08x\n", regs_buff[20]);
++
++    return 0;
++}
