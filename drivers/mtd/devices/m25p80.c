@@ -765,7 +765,8 @@ static const struct spi_device_id m25p_ids[] = {
 
 	/* Macronix */
 	{ "mx25l2005a",  INFO(0xc22012, 0, 64 * 1024,   4, SECT_4K) },
-	{ "mx25l4005a",  INFO(0xc22013, 0, 64 * 1024,   8, SECT_4K) },
+	{ "mx25l4006e",  INFO(0xc22013, 0, 64 * 1024,   8, SECT_4K) },
+	//{ "mx25l4005a",  INFO(0xc22013, 0, 64 * 1024,   8, SECT_4K) },
 	{ "mx25l8005",   INFO(0xc22014, 0, 64 * 1024,  16, 0) },
 	{ "mx25l1606e",  INFO(0xc22015, 0, 64 * 1024,  32, SECT_4K) },
 	{ "mx25l3205d",  INFO(0xc22016, 0, 64 * 1024,  64, 0) },
@@ -1048,7 +1049,12 @@ static int m25p_probe(struct spi_device *spi)
 
 	ppdata.of_node = spi->dev.of_node;
 	flash->mtd.dev.parent = &spi->dev;
-	flash->page_size = info->page_size;
+	//flash->page_size = info->page_size;
+	/* small size page of Macronix chip */
+	if (info->jedec_id == 0xc22210 || info->jedec_id == 0xc22211)
+		flash->page_size = 32;
+	else
+		flash->page_size = info->page_size;
 	flash->mtd.writebufsize = flash->page_size;
 
 	if (np)
