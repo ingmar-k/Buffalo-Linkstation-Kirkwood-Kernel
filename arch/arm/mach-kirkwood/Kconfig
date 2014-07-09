@@ -58,6 +58,15 @@ config MACH_RD88F6192_NAS
 	  Say 'Y' here if you want your kernel to support the
 	  Marvell RD-88F6192-NAS Reference Board.
 
+config MACH_BUFFALO_LS_XL_V3
+	bool "Buffalo Linkstation Live V3 Board"
+	select KIRKWOOD_LEGACY
+	help
+	  Say 'Y' here if you want your kernel to support the
+	  Buffalo Linkstation Live V3 Board.
+	  Alias "NAS-1bay_LS_XL_M6192 V3.0",
+	  alias "LS-XL8C".
+
 config MACH_RD88F6281
 	bool "Marvell RD-88F6281 Reference Board"
 	select KIRKWOOD_LEGACY
