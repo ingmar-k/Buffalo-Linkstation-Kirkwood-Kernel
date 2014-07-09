@@ -354,7 +354,7 @@ static int nfs_write_begin(struct file *file, struct address_space *mapping,
 	struct page *page;
 	int once_thru = 0;
 
-	dfprintk(PAGECACHE, "NFS: write_begin(%pD2(%ld), %u@%lld)\n",
+	dfprintk(PAGECACHE, "NFS: write_begin(%pD2(%lu), %u@%lld)\n",
 		file, mapping->host->i_ino, len, (long long) pos);
 
 start:
@@ -395,7 +395,7 @@ static int nfs_write_end(struct file *file, struct address_space *mapping,
 	struct nfs_open_context *ctx = nfs_file_open_context(file);
 	int status;
 
-	dfprintk(PAGECACHE, "NFS: write_end(%pD2(%ld), %u@%lld)\n",
+	dfprintk(PAGECACHE, "NFS: write_end(%pD2(%lu), %u@%lld)\n",
 		file, mapping->host->i_ino, len, (long long) pos);
 
 	/*
@@ -585,7 +585,7 @@ static int nfs_vm_page_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf)
 	int ret = VM_FAULT_NOPAGE;
 	struct address_space *mapping;
 
-	dfprintk(PAGECACHE, "NFS: vm_page_mkwrite(%pD2(%ld), offset %lld)\n",
+	dfprintk(PAGECACHE, "NFS: vm_page_mkwrite(%pD2(%lu), offset %lld)\n",
 		filp, filp->f_mapping->host->i_ino,
 		(long long)page_offset(page));
 
@@ -617,6 +617,7 @@ out:
 
 static const struct vm_operations_struct nfs_file_vm_ops = {
 	.fault = filemap_fault,
+	.map_pages = filemap_map_pages,
 	.page_mkwrite = nfs_vm_page_mkwrite,
 	.remap_pages = generic_file_remap_pages,
 };

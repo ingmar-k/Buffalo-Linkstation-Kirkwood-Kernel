@@ -330,7 +330,7 @@ enum {
 };
 
 typedef enum {
-	/** invalide type */
+	/** invalid type */
 	LDLM_NS_TYPE_UNKNOWN    = 0,
 	/** mdc namespace */
 	LDLM_NS_TYPE_MDC,
@@ -1185,7 +1185,7 @@ ldlm_handle2lock_long(const struct lustre_handle *h, __u64 flags)
 
 /**
  * Update Lock Value Block Operations (LVBO) on a resource taking into account
- * data from reqest \a r
+ * data from request \a r
  */
 static inline int ldlm_res_lvbo_update(struct ldlm_resource *res,
 				       struct ptlrpc_request *r, int increase)
@@ -1285,10 +1285,11 @@ void ldlm_namespace_register(struct ldlm_namespace *ns, ldlm_side_t client);
 void ldlm_namespace_unregister(struct ldlm_namespace *ns, ldlm_side_t client);
 void ldlm_namespace_get(struct ldlm_namespace *ns);
 void ldlm_namespace_put(struct ldlm_namespace *ns);
-int ldlm_proc_setup(void);
 #ifdef LPROCFS
+int ldlm_proc_setup(void);
 void ldlm_proc_cleanup(void);
 #else
+static inline int ldlm_proc_setup(void) { return 0; }
 static inline void ldlm_proc_cleanup(void) {}
 #endif
 

@@ -19,6 +19,7 @@
 #include <linux/bitmap.h>
 #include <linux/rcupdate.h>
 #include <linux/export.h>
+#include <linux/time.h>
 #include <net/net_namespace.h>
 #include <net/ieee80211_radiotap.h>
 #include <net/cfg80211.h>
@@ -451,8 +452,7 @@ static int ieee80211_use_mfp(__le16 fc, struct sta_info *sta,
 	if (sta == NULL || !test_sta_flag(sta, WLAN_STA_MFP))
 		return 0;
 
-	if (!ieee80211_is_robust_mgmt_frame((struct ieee80211_hdr *)
-					    skb->data))
+	if (!ieee80211_is_robust_mgmt_frame(skb))
 		return 0;
 
 	return 1;
@@ -503,6 +503,7 @@ ieee80211_tx_h_unicast_ps_buf(struct ieee80211_tx_data *tx)
 		info->control.jiffies = jiffies;
 		info->control.vif = &tx->sdata->vif;
 		info->flags |= IEEE80211_TX_INTFL_NEED_TXPROCESSING;
+		info->flags &= ~IEEE80211_TX_TEMPORARY_FLAGS;
 		skb_queue_tail(&sta->ps_tx_buf[ac], tx->skb);
 		spin_unlock(&sta->ps_lock);
 
@@ -536,11 +537,8 @@ ieee80211_tx_h_ps_buf(struct ieee80211_tx_data *tx)
 	if (unlikely(tx->flags & IEEE80211_TX_PS_BUFFERED))
 		return TX_CONTINUE;
 
-	/* only deauth, disassoc and action are bufferable MMPDUs */
 	if (ieee80211_is_mgmt(hdr->frame_control) &&
-	    !ieee80211_is_deauth(hdr->frame_control) &&
-	    !ieee80211_is_disassoc(hdr->frame_control) &&
-	    !ieee80211_is_action(hdr->frame_control)) {
+	    !ieee80211_is_bufferable_mmpdu(hdr->frame_control)) {
 		if (tx->flags & IEEE80211_TX_UNICAST)
 			info->flags |= IEEE80211_TX_CTL_NO_PS_BUFFER;
 		return TX_CONTINUE;
@@ -575,11 +573,12 @@ ieee80211_tx_h_select_key(struct ieee80211_tx_data *tx)
 
 	if (unlikely(info->flags & IEEE80211_TX_INTFL_DONT_ENCRYPT))
 		tx->key = NULL;
-	else if (tx->sta && (key = rcu_dereference(tx->sta->ptk)))
+	else if (tx->sta &&
+		 (key = rcu_dereference(tx->sta->ptk[tx->sta->ptk_idx])))
 		tx->key = key;
 	else if (ieee80211_is_mgmt(hdr->frame_control) &&
 		 is_multicast_ether_addr(hdr->addr1) &&
-		 ieee80211_is_robust_mgmt_frame(hdr) &&
+		 ieee80211_is_robust_mgmt_frame(tx->skb) &&
 		 (key = rcu_dereference(tx->sdata->default_mgmt_key)))
 		tx->key = key;
 	else if (is_multicast_ether_addr(hdr->addr1) &&
@@ -594,12 +593,12 @@ ieee80211_tx_h_select_key(struct ieee80211_tx_data *tx)
 		tx->key = NULL;
 	else if (tx->skb->protocol == tx->sdata->control_port_protocol)
 		tx->key = NULL;
-	else if (ieee80211_is_robust_mgmt_frame(hdr) &&
+	else if (ieee80211_is_robust_mgmt_frame(tx->skb) &&
 		 !(ieee80211_is_action(hdr->frame_control) &&
 		   tx->sta && test_sta_flag(tx->sta, WLAN_STA_MFP)))
 		tx->key = NULL;
 	else if (ieee80211_is_mgmt(hdr->frame_control) &&
-		 !ieee80211_is_robust_mgmt_frame(hdr))
+		 !ieee80211_is_robust_mgmt_frame(tx->skb))
 		tx->key = NULL;
 	else {
 		I802_DEBUG_INC(tx->local->tx_handlers_drop_unencrypted);
@@ -858,15 +857,16 @@ static int ieee80211_fragment(struct ieee80211_tx_data *tx,
 		rem -= fraglen;
 		tmp = dev_alloc_skb(local->tx_headroom +
 				    frag_threshold +
-				    IEEE80211_ENCRYPT_HEADROOM +
+				    tx->sdata->encrypt_headroom +
 				    IEEE80211_ENCRYPT_TAILROOM);
 		if (!tmp)
 			return -ENOMEM;
 
 		__skb_queue_tail(&tx->skbs, tmp);
 
-		skb_reserve(tmp, local->tx_headroom +
-				 IEEE80211_ENCRYPT_HEADROOM);
+		skb_reserve(tmp,
+			    local->tx_headroom + tx->sdata->encrypt_headroom);
+
 		/* copy control information */
 		memcpy(tmp->cb, skb->cb, sizeof(tmp->cb));
 
@@ -1088,6 +1088,7 @@ static bool ieee80211_tx_prep_agg(struct ieee80211_tx_data *tx,
 			queued = true;
 			info->control.vif = &tx->sdata->vif;
 			info->flags |= IEEE80211_TX_INTFL_NEED_TXPROCESSING;
+			info->flags &= ~IEEE80211_TX_TEMPORARY_FLAGS;
 			__skb_queue_tail(&tid_tx->pending, skb);
 			if (skb_queue_len(&tid_tx->pending) > STA_MAX_TX_BUFFER)
 				purge_skb = __skb_dequeue(&tid_tx->pending);
@@ -1503,7 +1504,7 @@ void ieee80211_xmit(struct ieee80211_sub_if_data *sdata, struct sk_buff *skb,
 
 	headroom = local->tx_headroom;
 	if (may_encrypt)
-		headroom += IEEE80211_ENCRYPT_HEADROOM;
+		headroom += sdata->encrypt_headroom;
 	headroom -= skb_headroom(skb);
 	headroom = max_t(int, 0, headroom);
 
@@ -1742,8 +1743,7 @@ netdev_tx_t ieee80211_monitor_start_xmit(struct sk_buff *skb,
 	 * radar detection by itself. We can do that later by adding a
 	 * monitor flag interfaces used for AP support.
 	 */
-	if ((chan->flags & (IEEE80211_CHAN_NO_IBSS | IEEE80211_CHAN_RADAR |
-			    IEEE80211_CHAN_PASSIVE_SCAN)))
+	if ((chan->flags & (IEEE80211_CHAN_NO_IR | IEEE80211_CHAN_RADAR)))
 		goto fail_rcu;
 
 	ieee80211_xmit(sdata, skb, chan->band);
@@ -1756,6 +1756,26 @@ fail_rcu:
 fail:
 	dev_kfree_skb(skb);
 	return NETDEV_TX_OK; /* meaning, we dealt with the skb */
+}
+
+/*
+ * Measure Tx frame arrival time for Tx latency statistics calculation
+ * A single Tx frame latency should be measured from when it is entering the
+ * Kernel until we receive Tx complete confirmation indication and the skb is
+ * freed.
+ */
+static void ieee80211_tx_latency_start_msrmnt(struct ieee80211_local *local,
+					      struct sk_buff *skb)
+{
+	struct timespec skb_arv;
+	struct ieee80211_tx_latency_bin_ranges *tx_latency;
+
+	tx_latency = rcu_dereference(local->tx_latency);
+	if (!tx_latency)
+		return;
+
+	ktime_get_ts(&skb_arv);
+	skb->tstamp = ktime_set(skb_arv.tv_sec, skb_arv.tv_nsec);
 }
 
 /**
@@ -1807,6 +1827,9 @@ netdev_tx_t ieee80211_subif_start_xmit(struct sk_buff *skb,
 	fc = cpu_to_le16(IEEE80211_FTYPE_DATA | IEEE80211_STYPE_DATA);
 
 	rcu_read_lock();
+
+	/* Measure frame arrival for Tx latency statistics calculation */
+	ieee80211_tx_latency_start_msrmnt(local, skb);
 
 	switch (sdata->vif.type) {
 	case NL80211_IFTYPE_AP_VLAN:
@@ -2127,7 +2150,7 @@ netdev_tx_t ieee80211_subif_start_xmit(struct sk_buff *skb,
 	 */
 
 	if (head_need > 0 || skb_cloned(skb)) {
-		head_need += IEEE80211_ENCRYPT_HEADROOM;
+		head_need += sdata->encrypt_headroom;
 		head_need += local->tx_headroom;
 		head_need = max_t(int, 0, head_need);
 		if (ieee80211_skb_resize(sdata, skb, head_need, true)) {
@@ -2154,7 +2177,7 @@ netdev_tx_t ieee80211_subif_start_xmit(struct sk_buff *skb,
 	if (ieee80211_is_data_qos(fc)) {
 		__le16 *qos_control;
 
-		qos_control = (__le16*) skb_push(skb, 2);
+		qos_control = (__le16 *) skb_push(skb, 2);
 		memcpy(skb_push(skb, hdrlen - 2), &hdr, hdrlen - 2);
 		/*
 		 * Maybe we could actually set some fields here, for now just
@@ -2316,7 +2339,7 @@ static void __ieee80211_beacon_add_tim(struct ieee80211_sub_if_data *sdata,
 	if (atomic_read(&ps->num_sta_ps) > 0)
 		/* in the hope that this is faster than
 		 * checking byte-for-byte */
-		have_bits = !bitmap_empty((unsigned long*)ps->tim,
+		have_bits = !bitmap_empty((unsigned long *)ps->tim,
 					  IEEE80211_MAX_AID+1);
 
 	if (ps->dtim_count == 0)
@@ -2390,15 +2413,6 @@ static int ieee80211_beacon_add_tim(struct ieee80211_sub_if_data *sdata,
 	return 0;
 }
 
-void ieee80211_csa_finish(struct ieee80211_vif *vif)
-{
-	struct ieee80211_sub_if_data *sdata = vif_to_sdata(vif);
-
-	ieee80211_queue_work(&sdata->local->hw,
-			     &sdata->csa_finalize_work);
-}
-EXPORT_SYMBOL(ieee80211_csa_finish);
-
 static void ieee80211_update_csa(struct ieee80211_sub_if_data *sdata,
 				 struct beacon_data *beacon)
 {
@@ -2427,8 +2441,12 @@ static void ieee80211_update_csa(struct ieee80211_sub_if_data *sdata,
 	if (WARN_ON(counter_offset_beacon >= beacon_data_len))
 		return;
 
-	/* warn if the driver did not check for/react to csa completeness */
-	if (WARN_ON(beacon_data[counter_offset_beacon] == 0))
+	/* Warn if the driver did not check for/react to csa
+	 * completeness.  A beacon with CSA counter set to 0 should
+	 * never occur, because a counter of 1 means switch just
+	 * before the next beacon.
+	 */
+	if (WARN_ON(beacon_data[counter_offset_beacon] == 1))
 		return;
 
 	beacon_data[counter_offset_beacon]--;
@@ -2494,7 +2512,7 @@ bool ieee80211_csa_is_complete(struct ieee80211_vif *vif)
 	if (WARN_ON(counter_beacon > beacon_data_len))
 		goto out;
 
-	if (beacon_data[counter_beacon] == 0)
+	if (beacon_data[counter_beacon] == 1)
 		ret = true;
  out:
 	rcu_read_unlock();
@@ -2542,7 +2560,8 @@ struct sk_buff *ieee80211_beacon_get_tim(struct ieee80211_hw *hw,
 			 */
 			skb = dev_alloc_skb(local->tx_headroom +
 					    beacon->head_len +
-					    beacon->tail_len + 256);
+					    beacon->tail_len + 256 +
+					    local->hw.extra_beacon_tailroom);
 			if (!skb)
 				goto out;
 
@@ -2574,7 +2593,8 @@ struct sk_buff *ieee80211_beacon_get_tim(struct ieee80211_hw *hw,
 			ieee80211_update_csa(sdata, presp);
 
 
-		skb = dev_alloc_skb(local->tx_headroom + presp->head_len);
+		skb = dev_alloc_skb(local->tx_headroom + presp->head_len +
+				    local->hw.extra_beacon_tailroom);
 		if (!skb)
 			goto out;
 		skb_reserve(skb, local->tx_headroom);
@@ -2595,13 +2615,13 @@ struct sk_buff *ieee80211_beacon_get_tim(struct ieee80211_hw *hw,
 			ieee80211_update_csa(sdata, bcn);
 
 		if (ifmsh->sync_ops)
-			ifmsh->sync_ops->adjust_tbtt(
-						sdata);
+			ifmsh->sync_ops->adjust_tbtt(sdata, bcn);
 
 		skb = dev_alloc_skb(local->tx_headroom +
 				    bcn->head_len +
 				    256 + /* TIM IE */
-				    bcn->tail_len);
+				    bcn->tail_len +
+				    local->hw.extra_beacon_tailroom);
 		if (!skb)
 			goto out;
 		skb_reserve(skb, local->tx_headroom);
@@ -2880,7 +2900,7 @@ ieee80211_get_buffered_bc(struct ieee80211_hw *hw,
 				cpu_to_le16(IEEE80211_FCTL_MOREDATA);
 		}
 
-		if (sdata->vif.type == NL80211_IFTYPE_AP_VLAN)
+		if (sdata->vif.type == NL80211_IFTYPE_AP)
 			sdata = IEEE80211_DEV_TO_SUB_IF(skb->dev);
 		if (!ieee80211_tx_prepare(sdata, &tx, skb))
 			break;

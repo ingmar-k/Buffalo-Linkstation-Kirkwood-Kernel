@@ -39,10 +39,9 @@
 #include <linux/list.h>
 #include <linux/spinlock.h>
 #include <linux/slab.h>
-#include <asm/io.h>
-#include <acpi/acpi_bus.h>
-#include <acpi/acpi_drivers.h>
+#include <linux/acpi.h>
 #include <linux/dmi.h>
+#include <asm/io.h>
 
 #include "internal.h"
 
@@ -92,10 +91,6 @@ MODULE_PARM_DESC(ec_delay, "Timeout(ms) waited until an EC command completes");
 static unsigned int ec_storm_threshold  __read_mostly = 8;
 module_param(ec_storm_threshold, uint, 0644);
 MODULE_PARM_DESC(ec_storm_threshold, "Maxim false GPE numbers not considered as GPE storm");
-
-/* If we find an EC via the ECDT, we need to keep a ptr to its context */
-/* External interfaces use first EC only, so remember */
-typedef int (*acpi_ec_query_func) (void *data);
 
 struct acpi_ec_query_handler {
 	struct list_head node;
@@ -211,13 +206,13 @@ unlock:
 	spin_unlock_irqrestore(&ec->lock, flags);
 }
 
-static int acpi_ec_sync_query(struct acpi_ec *ec);
+static int acpi_ec_sync_query(struct acpi_ec *ec, u8 *data);
 
 static int ec_check_sci_sync(struct acpi_ec *ec, u8 state)
 {
 	if (state & ACPI_EC_FLAG_SCI) {
 		if (!test_and_set_bit(EC_FLAGS_QUERY_PENDING, &ec->flags))
-			return acpi_ec_sync_query(ec);
+			return acpi_ec_sync_query(ec, NULL);
 	}
 	return 0;
 }
@@ -390,27 +385,6 @@ static int acpi_ec_write(struct acpi_ec *ec, u8 address, u8 data)
 	return acpi_ec_transaction(ec, &t);
 }
 
-/*
- * Externally callable EC access functions. For now, assume 1 EC only
- */
-int ec_burst_enable(void)
-{
-	if (!first_ec)
-		return -ENODEV;
-	return acpi_ec_burst_enable(first_ec);
-}
-
-EXPORT_SYMBOL(ec_burst_enable);
-
-int ec_burst_disable(void)
-{
-	if (!first_ec)
-		return -ENODEV;
-	return acpi_ec_burst_disable(first_ec);
-}
-
-EXPORT_SYMBOL(ec_burst_disable);
-
 int ec_read(u8 addr, u8 *val)
 {
 	int err;
@@ -469,10 +443,8 @@ acpi_handle ec_get_handle(void)
 
 EXPORT_SYMBOL(ec_get_handle);
 
-static int acpi_ec_query_unlocked(struct acpi_ec *ec, u8 *data);
-
 /*
- * Clears stale _Q events that might have accumulated in the EC.
+ * Process _Q events that might have accumulated in the EC.
  * Run with locked ec mutex.
  */
 static void acpi_ec_clear(struct acpi_ec *ec)
@@ -481,7 +453,7 @@ static void acpi_ec_clear(struct acpi_ec *ec)
 	u8 value = 0;
 
 	for (i = 0; i < ACPI_EC_CLEAR_MAX; i++) {
-		status = acpi_ec_query_unlocked(ec, &value);
+		status = acpi_ec_sync_query(ec, &value);
 		if (status || !value)
 			break;
 	}
@@ -608,13 +580,18 @@ static void acpi_ec_run(void *cxt)
 	kfree(handler);
 }
 
-static int acpi_ec_sync_query(struct acpi_ec *ec)
+static int acpi_ec_sync_query(struct acpi_ec *ec, u8 *data)
 {
 	u8 value = 0;
 	int status;
 	struct acpi_ec_query_handler *handler, *copy;
-	if ((status = acpi_ec_query_unlocked(ec, &value)))
+
+	status = acpi_ec_query_unlocked(ec, &value);
+	if (data)
+		*data = value;
+	if (status)
 		return status;
+
 	list_for_each_entry(handler, &ec->list, node) {
 		if (value == handler->query_bit) {
 			/* have custom handler for this bit */
@@ -638,7 +615,7 @@ static void acpi_ec_gpe_query(void *ec_cxt)
 	if (!ec)
 		return;
 	mutex_lock(&ec->mutex);
-	acpi_ec_sync_query(ec);
+	acpi_ec_sync_query(ec, NULL);
 	mutex_unlock(&ec->mutex);
 }
 
@@ -809,9 +786,9 @@ static int ec_install_handlers(struct acpi_ec *ec)
 			pr_err("Fail in evaluating the _REG object"
 				" of EC device. Broken bios is suspected.\n");
 		} else {
+			acpi_disable_gpe(NULL, ec->gpe);
 			acpi_remove_gpe_handler(NULL, ec->gpe,
 				&acpi_ec_gpe_handler);
-			acpi_disable_gpe(NULL, ec->gpe);
 			return -ENODEV;
 		}
 	}

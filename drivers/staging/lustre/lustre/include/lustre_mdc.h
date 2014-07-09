@@ -48,12 +48,9 @@
  * @{
  */
 
-# include <linux/fs.h>
-# include <linux/dcache.h>
-# ifdef CONFIG_FS_POSIX_ACL
-#  include <linux/posix_acl_xattr.h>
-# endif /* CONFIG_FS_POSIX_ACL */
-# include <linux/lustre_intent.h>
+#include <linux/fs.h>
+#include <linux/dcache.h>
+#include <linux/lustre_intent.h>
 #include <lustre_handles.h>
 #include <linux/libcfs/libcfs.h>
 #include <obd_class.h>
@@ -168,6 +165,17 @@ int it_disposition(struct lookup_intent *it, int flag);
 void it_clear_disposition(struct lookup_intent *it, int flag);
 void it_set_disposition(struct lookup_intent *it, int flag);
 int it_open_error(int phase, struct lookup_intent *it);
+
+static inline bool cl_is_lov_delay_create(unsigned int flags)
+{
+	return (flags & O_LOV_DELAY_CREATE) == O_LOV_DELAY_CREATE;
+}
+
+static inline void cl_lov_delay_create_clear(unsigned int *flags)
+{
+	if ((*flags & O_LOV_DELAY_CREATE) == O_LOV_DELAY_CREATE)
+		*flags &= ~O_LOV_DELAY_CREATE;
+}
 
 /** @} mdc */
 

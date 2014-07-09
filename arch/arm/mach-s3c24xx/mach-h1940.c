@@ -19,6 +19,7 @@
 #include <linux/init.h>
 #include <linux/device.h>
 #include <linux/serial_core.h>
+#include <linux/serial_s3c.h>
 #include <linux/platform_device.h>
 #include <linux/io.h>
 #include <linux/gpio.h>
@@ -54,6 +55,7 @@
 #include <mach/regs-clock.h>
 #include <mach/regs-gpio.h>
 #include <mach/regs-lcd.h>
+#include <mach/gpio-samsung.h>
 
 #include <plat/clock.h>
 #include <plat/cpu.h>
@@ -61,7 +63,6 @@
 #include <plat/gpio-cfg.h>
 #include <plat/pll.h>
 #include <plat/pm.h>
-#include <plat/regs-serial.h>
 #include <plat/samsung-time.h>
 
 #include "common.h"

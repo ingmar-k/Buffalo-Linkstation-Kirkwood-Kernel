@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel 10 Gigabit PCI Express Linux driver
-  Copyright(c) 1999 - 2013 Intel Corporation.
+  Copyright(c) 1999 - 2014 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -20,6 +20,7 @@
   the file called "COPYING".
 
   Contact Information:
+  Linux NICS <linux.nics@intel.com>
   e1000-devel Mailing List <e1000-devel@lists.sourceforge.net>
   Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
 
@@ -1127,10 +1128,10 @@ static void ixgbe_get_ethtool_stats(struct net_device *netdev,
 		}
 
 		do {
-			start = u64_stats_fetch_begin_bh(&ring->syncp);
+			start = u64_stats_fetch_begin_irq(&ring->syncp);
 			data[i]   = ring->stats.packets;
 			data[i+1] = ring->stats.bytes;
-		} while (u64_stats_fetch_retry_bh(&ring->syncp, start));
+		} while (u64_stats_fetch_retry_irq(&ring->syncp, start));
 		i += 2;
 #ifdef BP_EXTENDED_STATS
 		data[i] = ring->stats.yields;
@@ -1155,10 +1156,10 @@ static void ixgbe_get_ethtool_stats(struct net_device *netdev,
 		}
 
 		do {
-			start = u64_stats_fetch_begin_bh(&ring->syncp);
+			start = u64_stats_fetch_begin_irq(&ring->syncp);
 			data[i]   = ring->stats.packets;
 			data[i+1] = ring->stats.bytes;
-		} while (u64_stats_fetch_retry_bh(&ring->syncp, start));
+		} while (u64_stats_fetch_retry_irq(&ring->syncp, start));
 		i += 2;
 #ifdef BP_EXTENDED_STATS
 		data[i] = ring->stats.yields;
@@ -1247,6 +1248,11 @@ static int ixgbe_link_test(struct ixgbe_adapter *adapter, u64 *data)
 	struct ixgbe_hw *hw = &adapter->hw;
 	bool link_up;
 	u32 link_speed = 0;
+
+	if (ixgbe_removed(hw->hw_addr)) {
+		*data = 1;
+		return 1;
+	}
 	*data = 0;
 
 	hw->mac.ops.check_link(hw, &link_speed, &link_up, true);
@@ -1342,54 +1348,49 @@ static bool reg_pattern_test(struct ixgbe_adapter *adapter, u64 *data, int reg,
 	static const u32 test_pattern[] = {
 		0x5A5A5A5A, 0xA5A5A5A5, 0x00000000, 0xFFFFFFFF};
 
+	if (ixgbe_removed(adapter->hw.hw_addr)) {
+		*data = 1;
+		return 1;
+	}
 	for (pat = 0; pat < ARRAY_SIZE(test_pattern); pat++) {
-		before = readl(adapter->hw.hw_addr + reg);
-		writel((test_pattern[pat] & write),
-		       (adapter->hw.hw_addr + reg));
-		val = readl(adapter->hw.hw_addr + reg);
+		before = ixgbe_read_reg(&adapter->hw, reg);
+		ixgbe_write_reg(&adapter->hw, reg, test_pattern[pat] & write);
+		val = ixgbe_read_reg(&adapter->hw, reg);
 		if (val != (test_pattern[pat] & write & mask)) {
 			e_err(drv, "pattern test reg %04X failed: got "
 			      "0x%08X expected 0x%08X\n",
 			      reg, val, (test_pattern[pat] & write & mask));
 			*data = reg;
-			writel(before, adapter->hw.hw_addr + reg);
-			return 1;
+			ixgbe_write_reg(&adapter->hw, reg, before);
+			return true;
 		}
-		writel(before, adapter->hw.hw_addr + reg);
+		ixgbe_write_reg(&adapter->hw, reg, before);
 	}
-	return 0;
+	return false;
 }
 
 static bool reg_set_and_check(struct ixgbe_adapter *adapter, u64 *data, int reg,
 			      u32 mask, u32 write)
 {
 	u32 val, before;
-	before = readl(adapter->hw.hw_addr + reg);
-	writel((write & mask), (adapter->hw.hw_addr + reg));
-	val = readl(adapter->hw.hw_addr + reg);
+
+	if (ixgbe_removed(adapter->hw.hw_addr)) {
+		*data = 1;
+		return 1;
+	}
+	before = ixgbe_read_reg(&adapter->hw, reg);
+	ixgbe_write_reg(&adapter->hw, reg, write & mask);
+	val = ixgbe_read_reg(&adapter->hw, reg);
 	if ((write & mask) != (val & mask)) {
 		e_err(drv, "set/check reg %04X test failed: got 0x%08X "
 		      "expected 0x%08X\n", reg, (val & mask), (write & mask));
 		*data = reg;
-		writel(before, (adapter->hw.hw_addr + reg));
-		return 1;
+		ixgbe_write_reg(&adapter->hw, reg, before);
+		return true;
 	}
-	writel(before, (adapter->hw.hw_addr + reg));
-	return 0;
+	ixgbe_write_reg(&adapter->hw, reg, before);
+	return false;
 }
-
-#define REG_PATTERN_TEST(reg, mask, write)				      \
-	do {								      \
-		if (reg_pattern_test(adapter, data, reg, mask, write))	      \
-			return 1;					      \
-	} while (0)							      \
-
-
-#define REG_SET_AND_CHECK(reg, mask, write)				      \
-	do {								      \
-		if (reg_set_and_check(adapter, data, reg, mask, write))	      \
-			return 1;					      \
-	} while (0)							      \
 
 static int ixgbe_reg_test(struct ixgbe_adapter *adapter, u64 *data)
 {
@@ -1397,6 +1398,11 @@ static int ixgbe_reg_test(struct ixgbe_adapter *adapter, u64 *data)
 	u32 value, before, after;
 	u32 i, toggle;
 
+	if (ixgbe_removed(adapter->hw.hw_addr)) {
+		e_err(drv, "Adapter removed - register test blocked\n");
+		*data = 1;
+		return 1;
+	}
 	switch (adapter->hw.mac.type) {
 	case ixgbe_mac_82598EB:
 		toggle = 0x7FFFF3FF;
@@ -1419,10 +1425,10 @@ static int ixgbe_reg_test(struct ixgbe_adapter *adapter, u64 *data)
 	 * tests.  Some bits are read-only, some toggle, and some
 	 * are writeable on newer MACs.
 	 */
-	before = IXGBE_READ_REG(&adapter->hw, IXGBE_STATUS);
-	value = (IXGBE_READ_REG(&adapter->hw, IXGBE_STATUS) & toggle);
-	IXGBE_WRITE_REG(&adapter->hw, IXGBE_STATUS, toggle);
-	after = IXGBE_READ_REG(&adapter->hw, IXGBE_STATUS) & toggle;
+	before = ixgbe_read_reg(&adapter->hw, IXGBE_STATUS);
+	value = (ixgbe_read_reg(&adapter->hw, IXGBE_STATUS) & toggle);
+	ixgbe_write_reg(&adapter->hw, IXGBE_STATUS, toggle);
+	after = ixgbe_read_reg(&adapter->hw, IXGBE_STATUS) & toggle;
 	if (value != after) {
 		e_err(drv, "failed STATUS register test got: 0x%08X "
 		      "expected: 0x%08X\n", after, value);
@@ -1430,7 +1436,7 @@ static int ixgbe_reg_test(struct ixgbe_adapter *adapter, u64 *data)
 		return 1;
 	}
 	/* restore previous status */
-	IXGBE_WRITE_REG(&adapter->hw, IXGBE_STATUS, before);
+	ixgbe_write_reg(&adapter->hw, IXGBE_STATUS, before);
 
 	/*
 	 * Perform the remainder of the register test, looping through
@@ -1438,38 +1444,47 @@ static int ixgbe_reg_test(struct ixgbe_adapter *adapter, u64 *data)
 	 */
 	while (test->reg) {
 		for (i = 0; i < test->array_len; i++) {
+			bool b = false;
+
 			switch (test->test_type) {
 			case PATTERN_TEST:
-				REG_PATTERN_TEST(test->reg + (i * 0x40),
-						 test->mask,
-						 test->write);
+				b = reg_pattern_test(adapter, data,
+						     test->reg + (i * 0x40),
+						     test->mask,
+						     test->write);
 				break;
 			case SET_READ_TEST:
-				REG_SET_AND_CHECK(test->reg + (i * 0x40),
-						  test->mask,
-						  test->write);
+				b = reg_set_and_check(adapter, data,
+						      test->reg + (i * 0x40),
+						      test->mask,
+						      test->write);
 				break;
 			case WRITE_NO_TEST:
-				writel(test->write,
-				       (adapter->hw.hw_addr + test->reg)
-				       + (i * 0x40));
+				ixgbe_write_reg(&adapter->hw,
+						test->reg + (i * 0x40),
+						test->write);
 				break;
 			case TABLE32_TEST:
-				REG_PATTERN_TEST(test->reg + (i * 4),
-						 test->mask,
-						 test->write);
+				b = reg_pattern_test(adapter, data,
+						     test->reg + (i * 4),
+						     test->mask,
+						     test->write);
 				break;
 			case TABLE64_TEST_LO:
-				REG_PATTERN_TEST(test->reg + (i * 8),
-						 test->mask,
-						 test->write);
+				b = reg_pattern_test(adapter, data,
+						     test->reg + (i * 8),
+						     test->mask,
+						     test->write);
 				break;
 			case TABLE64_TEST_HI:
-				REG_PATTERN_TEST((test->reg + 4) + (i * 8),
-						 test->mask,
-						 test->write);
+				b = reg_pattern_test(adapter, data,
+						     (test->reg + 4) + (i * 8),
+						     test->mask,
+						     test->write);
 				break;
 			}
+			if (b)
+				return 1;
 		}
 		test++;
 	}
@@ -1954,6 +1969,16 @@ static void ixgbe_diag_test(struct net_device *netdev,
 	struct ixgbe_adapter *adapter = netdev_priv(netdev);
 	bool if_running = netif_running(netdev);
 
+	if (ixgbe_removed(adapter->hw.hw_addr)) {
+		e_err(hw, "Adapter removed - test blocked\n");
+		data[0] = 1;
+		data[1] = 1;
+		data[2] = 1;
+		data[3] = 1;
+		data[4] = 1;
+		eth_test->flags |= ETH_TEST_FL_FAILED;
+		return;
+	}
 	set_bit(__IXGBE_TESTING, &adapter->state);
 	if (eth_test->flags == ETH_TEST_FL_OFFLINE) {
 		struct ixgbe_hw *hw = &adapter->hw;
@@ -1970,6 +1995,7 @@ static void ixgbe_diag_test(struct net_device *netdev,
 					data[1] = 1;
 					data[2] = 1;
 					data[3] = 1;
+					data[4] = 1;
 					eth_test->flags |= ETH_TEST_FL_FAILED;
 					clear_bit(__IXGBE_TESTING,
 						  &adapter->state);

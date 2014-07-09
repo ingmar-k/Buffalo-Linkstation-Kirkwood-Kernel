@@ -5,6 +5,7 @@
 #include <linux/init.h>
 #include <linux/kern_levels.h>
 #include <linux/linkage.h>
+#include <linux/cache.h>
 
 extern const char linux_banner[];
 extern const char linux_proc_banner[];
@@ -23,13 +24,9 @@ static inline int printk_get_level(const char *buffer)
 
 static inline const char *printk_skip_level(const char *buffer)
 {
-	if (printk_get_level(buffer)) {
-		switch (buffer[1]) {
-		case '0' ... '7':
-		case 'd':	/* KERN_DEFAULT */
-			return buffer + 2;
-		}
-	}
+	if (printk_get_level(buffer))
+		return buffer + 2;
+
 	return buffer;
 }
 
@@ -88,6 +85,13 @@ struct va_format {
 #define HW_ERR		"[Hardware Error]: "
 
 /*
+ * DEPRECATED
+ * Add this to a message whenever you want to warn user space about the use
+ * of a deprecated aspect of an API so they can stop using it
+ */
+#define DEPRECATED	"[Deprecated]: "
+
+/*
  * Dummy printk for disabled debugging statements to use whilst maintaining
  * gcc's format and side-effect checking.
  */
@@ -116,9 +120,9 @@ asmlinkage __printf(1, 0)
 int vprintk(const char *fmt, va_list args);
 
 asmlinkage __printf(5, 6) __cold
-asmlinkage int printk_emit(int facility, int level,
-			   const char *dict, size_t dictlen,
-			   const char *fmt, ...);
+int printk_emit(int facility, int level,
+		const char *dict, size_t dictlen,
+		const char *fmt, ...);
 
 asmlinkage __printf(1, 2) __cold
 int printk(const char *fmt, ...);
@@ -253,17 +257,17 @@ extern asmlinkage void dump_stack(void) __cold;
  */
 
 #ifdef CONFIG_PRINTK
-#define printk_once(fmt, ...)			\
-({						\
-	static bool __print_once;		\
-						\
-	if (!__print_once) {			\
-		__print_once = true;		\
-		printk(fmt, ##__VA_ARGS__);	\
-	}					\
+#define printk_once(fmt, ...)					\
+({								\
+	static bool __print_once __read_mostly;			\
+								\
+	if (!__print_once) {					\
+		__print_once = true;				\
+		printk(fmt, ##__VA_ARGS__);			\
+	}							\
 })
 #else
-#define printk_once(fmt, ...)			\
+#define printk_once(fmt, ...)					\
 	no_printk(fmt, ##__VA_ARGS__)
 #endif
 

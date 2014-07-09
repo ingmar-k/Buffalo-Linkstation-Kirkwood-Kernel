@@ -801,7 +801,7 @@ static int stu300_xfer_msg(struct i2c_adapter *adap,
 	/* Check that the bus is free, or wait until some timeout occurs */
 	ret = stu300_wait_while_busy(dev);
 	if (ret != 0) {
-		dev_err(&dev->pdev->dev, "timout waiting for transfer "
+		dev_err(&dev->pdev->dev, "timeout waiting for transfer "
 		       "to commence.\n");
 		goto exit_disable;
 	}
@@ -911,7 +911,7 @@ static int stu300_probe(struct platform_device *pdev)
 	adap = &dev->adapter;
 	adap->owner = THIS_MODULE;
 	/* DDC class but actually often used for more generic I2C */
-	adap->class = I2C_CLASS_DDC;
+	adap->class = I2C_CLASS_DDC | I2C_CLASS_DEPRECATED;
 	strlcpy(adap->name, "ST Microelectronics DDC I2C adapter",
 		sizeof(adap->name));
 	adap->nr = bus_nr;

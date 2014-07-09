@@ -473,7 +473,7 @@ static struct clk_lookup dm365_clks[] = {
 	CLK(NULL, "pwm3", &pwm3_clk),
 	CLK(NULL, "timer0", &timer0_clk),
 	CLK(NULL, "timer1", &timer1_clk),
-	CLK("watchdog", NULL, &timer2_clk),
+	CLK("davinci-wdt", NULL, &timer2_clk),
 	CLK(NULL, "timer3", &timer3_clk),
 	CLK(NULL, "usb", &usb_clk),
 	CLK("davinci_emac.1", NULL, &emac_clk),
@@ -713,7 +713,6 @@ static struct resource dm365_gpio_resources[] = {
 
 static struct davinci_gpio_platform_data dm365_gpio_platform_data = {
 	.ngpio		= 104,
-	.intc_irq_num	= DAVINCI_N_AINTC_IRQ,
 	.gpio_unbanked	= 8,
 };
 
@@ -1437,6 +1436,8 @@ int __init dm365_init_video(struct vpfe_config *vpfe_cfg,
 
 static int __init dm365_init_devices(void)
 {
+	int ret = 0;
+
 	if (!cpu_is_davinci_dm365())
 		return 0;
 
@@ -1446,6 +1447,10 @@ static int __init dm365_init_devices(void)
 	platform_device_register(&dm365_mdio_device);
 	platform_device_register(&dm365_emac_device);
 
-	return 0;
+	ret = davinci_init_wdt();
+	if (ret)
+		pr_warn("%s: watchdog init failed: %d\n", __func__, ret);
+
+	return ret;
 }
 postcore_initcall(dm365_init_devices);

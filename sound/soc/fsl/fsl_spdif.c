@@ -911,8 +911,8 @@ static int fsl_spdif_dai_probe(struct snd_soc_dai *dai)
 {
 	struct fsl_spdif_priv *spdif_private = snd_soc_dai_get_drvdata(dai);
 
-	dai->playback_dma_data = &spdif_private->dma_params_tx;
-	dai->capture_dma_data = &spdif_private->dma_params_rx;
+	snd_soc_dai_init_dma_data(dai, &spdif_private->dma_params_tx,
+				  &spdif_private->dma_params_rx);
 
 	snd_soc_add_dai_controls(dai, fsl_spdif_ctrls, ARRAY_SIZE(fsl_spdif_ctrls));
 
@@ -985,7 +985,7 @@ static bool fsl_spdif_writeable_reg(struct device *dev, unsigned int reg)
 	}
 }
 
-static const struct regmap_config fsl_spdif_regmap_config = {
+static struct regmap_config fsl_spdif_regmap_config = {
 	.reg_bits = 32,
 	.reg_stride = 4,
 	.val_bits = 32,
@@ -1105,6 +1105,9 @@ static int fsl_spdif_probe(struct platform_device *pdev)
 	memcpy(&spdif_priv->cpu_dai_drv, &fsl_spdif_dai, sizeof(fsl_spdif_dai));
 	spdif_priv->cpu_dai_drv.name = spdif_priv->name;
 
+	if (of_property_read_bool(np, "big-endian"))
+		fsl_spdif_regmap_config.val_format_endian = REGMAP_ENDIAN_BIG;
+
 	/* Get the addresses and IRQ */
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	regs = devm_ioremap_resource(&pdev->dev, res);
@@ -1181,13 +1184,6 @@ static int fsl_spdif_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static int fsl_spdif_remove(struct platform_device *pdev)
-{
-	imx_pcm_dma_exit(pdev);
-
-	return 0;
-}
-
 static const struct of_device_id fsl_spdif_dt_ids[] = {
 	{ .compatible = "fsl,imx35-spdif", },
 	{}
@@ -1201,7 +1197,6 @@ static struct platform_driver fsl_spdif_driver = {
 		.of_match_table = fsl_spdif_dt_ids,
 	},
 	.probe = fsl_spdif_probe,
-	.remove = fsl_spdif_remove,
 };
 
 module_platform_driver(fsl_spdif_driver);

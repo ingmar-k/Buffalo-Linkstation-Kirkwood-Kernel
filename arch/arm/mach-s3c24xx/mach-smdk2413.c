@@ -19,6 +19,7 @@
 #include <linux/init.h>
 #include <linux/gpio.h>
 #include <linux/serial_core.h>
+#include <linux/serial_s3c.h>
 #include <linux/platform_device.h>
 #include <linux/io.h>
 
@@ -33,12 +34,12 @@
 #include <asm/mach-types.h>
 
 //#include <asm/debug-ll.h>
-#include <plat/regs-serial.h>
 #include <mach/regs-gpio.h>
 #include <mach/regs-lcd.h>
 
 #include <linux/platform_data/usb-s3c2410_udc.h>
 #include <linux/platform_data/i2c-s3c2410.h>
+#include <mach/gpio-samsung.h>
 #include <mach/fb.h>
 
 #include <plat/clock.h>

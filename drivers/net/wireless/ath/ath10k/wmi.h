@@ -893,6 +893,7 @@ struct wmi_channel {
 	union {
 		__le32 reginfo0;
 		struct {
+			/* note: power unit is 0.5 dBm */
 			u8 min_power;
 			u8 max_power;
 			u8 reg_power;
@@ -915,7 +916,8 @@ struct wmi_channel_arg {
 	bool allow_ht;
 	bool allow_vht;
 	bool ht40plus;
-	/* note: power unit is 1/4th of dBm */
+	bool chan_radar;
+	/* note: power unit is 0.5 dBm */
 	u32 min_power;
 	u32 max_power;
 	u32 max_reg_power;
@@ -1977,6 +1979,10 @@ struct wmi_mgmt_rx_event_v2 {
 #define WMI_RX_STATUS_ERR_MIC			0x10
 #define WMI_RX_STATUS_ERR_KEY_CACHE_MISS	0x20
 
+#define PHY_ERROR_SPECTRAL_SCAN		0x26
+#define PHY_ERROR_FALSE_RADAR_EXT		0x24
+#define PHY_ERROR_RADAR				0x05
+
 struct wmi_single_phyerr_rx_hdr {
 	/* TSF timestamp */
 	__le32 tsf_timestamp;
@@ -2067,6 +2073,87 @@ struct wmi_comb_phyerr_rx_event {
 	 */
 	u8 bufp[0];
 } __packed;
+
+#define PHYERR_TLV_SIG				0xBB
+#define PHYERR_TLV_TAG_SEARCH_FFT_REPORT	0xFB
+#define PHYERR_TLV_TAG_RADAR_PULSE_SUMMARY	0xF8
+
+struct phyerr_radar_report {
+	__le32 reg0; /* RADAR_REPORT_REG0_* */
+	__le32 reg1; /* REDAR_REPORT_REG1_* */
+} __packed;
+
+#define RADAR_REPORT_REG0_PULSE_IS_CHIRP_MASK		0x80000000
+#define RADAR_REPORT_REG0_PULSE_IS_CHIRP_LSB		31
+
+#define RADAR_REPORT_REG0_PULSE_IS_MAX_WIDTH_MASK	0x40000000
+#define RADAR_REPORT_REG0_PULSE_IS_MAX_WIDTH_LSB	30
+
+#define RADAR_REPORT_REG0_AGC_TOTAL_GAIN_MASK		0x3FF00000
+#define RADAR_REPORT_REG0_AGC_TOTAL_GAIN_LSB		20
+
+#define RADAR_REPORT_REG0_PULSE_DELTA_DIFF_MASK		0x000F0000
+#define RADAR_REPORT_REG0_PULSE_DELTA_DIFF_LSB		16
+
+#define RADAR_REPORT_REG0_PULSE_DELTA_PEAK_MASK		0x0000FC00
+#define RADAR_REPORT_REG0_PULSE_DELTA_PEAK_LSB		10
+
+#define RADAR_REPORT_REG0_PULSE_SIDX_MASK		0x000003FF
+#define RADAR_REPORT_REG0_PULSE_SIDX_LSB		0
+
+#define RADAR_REPORT_REG1_PULSE_SRCH_FFT_VALID_MASK	0x80000000
+#define RADAR_REPORT_REG1_PULSE_SRCH_FFT_VALID_LSB	31
+
+#define RADAR_REPORT_REG1_PULSE_AGC_MB_GAIN_MASK	0x7F000000
+#define RADAR_REPORT_REG1_PULSE_AGC_MB_GAIN_LSB		24
+
+#define RADAR_REPORT_REG1_PULSE_SUBCHAN_MASK_MASK	0x00FF0000
+#define RADAR_REPORT_REG1_PULSE_SUBCHAN_MASK_LSB	16
+
+#define RADAR_REPORT_REG1_PULSE_TSF_OFFSET_MASK		0x0000FF00
+#define RADAR_REPORT_REG1_PULSE_TSF_OFFSET_LSB		8
+
+#define RADAR_REPORT_REG1_PULSE_DUR_MASK		0x000000FF
+#define RADAR_REPORT_REG1_PULSE_DUR_LSB			0
+
+struct phyerr_fft_report {
+	__le32 reg0; /* SEARCH_FFT_REPORT_REG0_ * */
+	__le32 reg1; /* SEARCH_FFT_REPORT_REG1_ * */
+} __packed;
+
+#define SEARCH_FFT_REPORT_REG0_TOTAL_GAIN_DB_MASK	0xFF800000
+#define SEARCH_FFT_REPORT_REG0_TOTAL_GAIN_DB_LSB	23
+
+#define SEARCH_FFT_REPORT_REG0_BASE_PWR_DB_MASK		0x007FC000
+#define SEARCH_FFT_REPORT_REG0_BASE_PWR_DB_LSB		14
+
+#define SEARCH_FFT_REPORT_REG0_FFT_CHN_IDX_MASK		0x00003000
+#define SEARCH_FFT_REPORT_REG0_FFT_CHN_IDX_LSB		12
+
+#define SEARCH_FFT_REPORT_REG0_PEAK_SIDX_MASK		0x00000FFF
+#define SEARCH_FFT_REPORT_REG0_PEAK_SIDX_LSB		0
+
+#define SEARCH_FFT_REPORT_REG1_RELPWR_DB_MASK		0xFC000000
+#define SEARCH_FFT_REPORT_REG1_RELPWR_DB_LSB		26
+
+#define SEARCH_FFT_REPORT_REG1_AVGPWR_DB_MASK		0x03FC0000
+#define SEARCH_FFT_REPORT_REG1_AVGPWR_DB_LSB		18
+
+#define SEARCH_FFT_REPORT_REG1_PEAK_MAG_MASK		0x0003FF00
+#define SEARCH_FFT_REPORT_REG1_PEAK_MAG_LSB		8
+
+#define SEARCH_FFT_REPORT_REG1_NUM_STR_BINS_IB_MASK	0x000000FF
+#define SEARCH_FFT_REPORT_REG1_NUM_STR_BINS_IB_LSB	0
+
+
+struct phyerr_tlv {
+	__le16 len;
+	u8 tag;
+	u8 sig;
+} __packed;
+
+#define DFS_RSSI_POSSIBLY_FALSE			50
+#define DFS_PEAK_MAG_THOLD_POSSIBLY_FALSE	40
 
 struct wmi_mgmt_tx_hdr {
 	__le32 vdev_id;
@@ -2190,7 +2277,6 @@ struct wmi_pdev_param_map {
 	u32 bcnflt_stats_update_period;
 	u32 pmf_qos;
 	u32 arp_ac_override;
-	u32 arpdhcp_ac_override;
 	u32 dcs;
 	u32 ani_enable;
 	u32 ani_poll_period;
@@ -2233,7 +2319,12 @@ enum wmi_pdev_param {
 	 * 0: no protection 1:use CTS-to-self 2: use RTS/CTS
 	 */
 	WMI_PDEV_PARAM_PROTECTION_MODE,
-	/* Dynamic bandwidth 0: disable 1: enable */
+	/*
+	 * Dynamic bandwidth - 0: disable, 1: enable
+	 *
+	 * When enabled HW rate control tries different bandwidths when
+	 * retransmitting frames.
+	 */
 	WMI_PDEV_PARAM_DYNAMIC_BW,
 	/* Non aggregrate/ 11g sw retry threshold.0-disable */
 	WMI_PDEV_PARAM_NON_AGG_SW_RETRY_TH,
@@ -2911,6 +3002,18 @@ struct wmi_vdev_install_key_arg {
 	const void *key_data;
 };
 
+/*
+ * vdev fixed rate format:
+ * - preamble - b7:b6 - see WMI_RATE_PREMABLE_
+ * - nss      - b5:b4 - ss number (0 mean 1ss)
+ * - rate_mcs - b3:b0 - as below
+ *    CCK:  0 - 11Mbps, 1 - 5,5Mbps, 2 - 2Mbps, 3 - 1Mbps,
+ *          4 - 11Mbps (s), 5 - 5,5Mbps (s), 6 - 2Mbps (s)
+ *    OFDM: 0 - 48Mbps, 1 - 24Mbps, 2 - 12Mbps, 3 - 6Mbps,
+ *          4 - 54Mbps, 5 - 36Mbps, 6 - 18Mbps, 7 - 9Mbps
+ *    HT/VHT: MCS index
+ */
+
 /* Preamble types to be used with VDEV fixed rate configuration */
 enum wmi_rate_preamble {
 	WMI_RATE_PREAMBLE_OFDM,
@@ -3298,6 +3401,24 @@ struct wmi_bcn_tx_arg {
 	u32 bcn_len;
 	const void *bcn;
 };
+
+enum wmi_bcn_tx_ref_flags {
+	WMI_BCN_TX_REF_FLAG_DTIM_ZERO = 0x1,
+	WMI_BCN_TX_REF_FLAG_DELIVER_CAB = 0x2,
+};
+
+struct wmi_bcn_tx_ref_cmd {
+	__le32 vdev_id;
+	__le32 data_len;
+	/* physical address of the frame - dma pointer */
+	__le32 data_ptr;
+	/* id for host to track */
+	__le32 msdu_id;
+	/* frame ctrl to setup PPDU desc */
+	__le32 frame_control;
+	/* to control CABQ traffic: WMI_BCN_TX_REF_FLAG_ */
+	__le32 flags;
+} __packed;
 
 /* Beacon filter */
 #define WMI_BCN_FILTER_ALL   0 /* Filter all beacons */
@@ -3755,6 +3876,12 @@ enum wmi_peer_smps_state {
 	WMI_PEER_SMPS_DYNAMIC = 0x2
 };
 
+enum wmi_peer_chwidth {
+	WMI_PEER_CHWIDTH_20MHZ = 0,
+	WMI_PEER_CHWIDTH_40MHZ = 1,
+	WMI_PEER_CHWIDTH_80MHZ = 2,
+};
+
 enum wmi_peer_param {
 	WMI_PEER_SMPS_STATE = 0x1, /* see %wmi_peer_smps_state */
 	WMI_PEER_AMPDU      = 0x2,
@@ -3935,6 +4062,10 @@ struct wmi_chan_info_event {
 	__le32 cycle_count;
 } __packed;
 
+struct wmi_peer_sta_kickout_event {
+	struct wmi_mac_addr peer_macaddr;
+} __packed;
+
 #define WMI_CHAN_INFO_FLAG_COMPLETE BIT(0)
 
 /* FIXME: empirically extrapolated */
@@ -3998,6 +4129,54 @@ struct wmi_force_fw_hang_cmd {
 	__le32 delay_ms;
 } __packed;
 
+enum ath10k_dbglog_level {
+	ATH10K_DBGLOG_LEVEL_VERBOSE = 0,
+	ATH10K_DBGLOG_LEVEL_INFO = 1,
+	ATH10K_DBGLOG_LEVEL_WARN = 2,
+	ATH10K_DBGLOG_LEVEL_ERR = 3,
+};
+
+/* VAP ids to enable dbglog */
+#define ATH10K_DBGLOG_CFG_VAP_LOG_LSB		0
+#define ATH10K_DBGLOG_CFG_VAP_LOG_MASK		0x0000ffff
+
+/* to enable dbglog in the firmware */
+#define ATH10K_DBGLOG_CFG_REPORTING_ENABLE_LSB	16
+#define ATH10K_DBGLOG_CFG_REPORTING_ENABLE_MASK	0x00010000
+
+/* timestamp resolution */
+#define ATH10K_DBGLOG_CFG_RESOLUTION_LSB	17
+#define ATH10K_DBGLOG_CFG_RESOLUTION_MASK	0x000E0000
+
+/* number of queued messages before sending them to the host */
+#define ATH10K_DBGLOG_CFG_REPORT_SIZE_LSB	20
+#define ATH10K_DBGLOG_CFG_REPORT_SIZE_MASK	0x0ff00000
+
+/*
+ * Log levels to enable. This defines the minimum level to enable, this is
+ * not a bitmask. See enum ath10k_dbglog_level for the values.
+ */
+#define ATH10K_DBGLOG_CFG_LOG_LVL_LSB		28
+#define ATH10K_DBGLOG_CFG_LOG_LVL_MASK		0x70000000
+
+/*
+ * Note: this is a cleaned up version of a struct firmware uses. For
+ * example, config_valid was hidden inside an array.
+ */
+struct wmi_dbglog_cfg_cmd {
+	/* bitmask to hold mod id config*/
+	__le32 module_enable;
+
+	/* see ATH10K_DBGLOG_CFG_ */
+	__le32 config_enable;
+
+	/* mask of module id bits to be changed */
+	__le32 module_valid;
+
+	/* mask of config bits to be changed, see ATH10K_DBGLOG_CFG_ */
+	__le32 config_valid;
+} __packed;
+
 #define ATH10K_RTS_MAX		2347
 #define ATH10K_FRAGMT_THRESHOLD_MIN	540
 #define ATH10K_FRAGMT_THRESHOLD_MAX	2346
@@ -4020,7 +4199,7 @@ int ath10k_wmi_wait_for_unified_ready(struct ath10k *ar);
 int ath10k_wmi_connect_htc_service(struct ath10k *ar);
 int ath10k_wmi_pdev_set_channel(struct ath10k *ar,
 				const struct wmi_channel_arg *);
-int ath10k_wmi_pdev_suspend_target(struct ath10k *ar);
+int ath10k_wmi_pdev_suspend_target(struct ath10k *ar, u32 suspend_opt);
 int ath10k_wmi_pdev_resume_target(struct ath10k *ar);
 int ath10k_wmi_pdev_set_regdomain(struct ath10k *ar, u16 rd, u16 rd2g,
 				  u16 rd5g, u16 ctl2g, u16 ctl5g);
@@ -4067,13 +4246,13 @@ int ath10k_wmi_set_ap_ps_param(struct ath10k *ar, u32 vdev_id, const u8 *mac,
 			       enum wmi_ap_ps_peer_param param_id, u32 value);
 int ath10k_wmi_scan_chan_list(struct ath10k *ar,
 			      const struct wmi_scan_chan_list_arg *arg);
-int ath10k_wmi_beacon_send_nowait(struct ath10k *ar,
-				  const struct wmi_bcn_tx_arg *arg);
+int ath10k_wmi_beacon_send_ref_nowait(struct ath10k_vif *arvif);
 int ath10k_wmi_pdev_set_wmm_params(struct ath10k *ar,
 			const struct wmi_pdev_set_wmm_params_arg *arg);
 int ath10k_wmi_request_stats(struct ath10k *ar, enum wmi_stats_id stats_id);
 int ath10k_wmi_force_fw_hang(struct ath10k *ar,
 			     enum wmi_force_fw_hang_type type, u32 delay_ms);
 int ath10k_wmi_mgmt_tx(struct ath10k *ar, struct sk_buff *skb);
+int ath10k_wmi_dbglog_cfg(struct ath10k *ar, u32 module_enable);
 
 #endif /* _WMI_H_ */

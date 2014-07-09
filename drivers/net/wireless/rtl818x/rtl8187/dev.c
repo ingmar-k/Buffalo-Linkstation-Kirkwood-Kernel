@@ -20,7 +20,6 @@
  * published by the Free Software Foundation.
  */
 
-#include <linux/init.h>
 #include <linux/usb.h>
 #include <linux/slab.h>
 #include <linux/delay.h>
@@ -416,7 +415,7 @@ static int rtl8187_init_urbs(struct ieee80211_hw *dev)
 	struct rtl8187_rx_info *info;
 	int ret = 0;
 
-	while (skb_queue_len(&priv->rx_queue) < 16) {
+	while (skb_queue_len(&priv->rx_queue) < 32) {
 		skb = __dev_alloc_skb(RTL8187_MAX_RX, GFP_KERNEL);
 		if (!skb) {
 			ret = -ENOMEM;
@@ -593,7 +592,7 @@ static void rtl8187_set_anaparam(struct rtl8187_priv *priv, bool rfon)
 	rtl818x_iowrite32(priv, &priv->map->ANAPARAM, anaparam);
 	rtl818x_iowrite32(priv, &priv->map->ANAPARAM2, anaparam2);
 	if (priv->is_rtl8187b)
-		rtl818x_iowrite8(priv, &priv->map->ANAPARAM3, anaparam3);
+		rtl818x_iowrite8(priv, &priv->map->ANAPARAM3A, anaparam3);
 	reg &= ~RTL818X_CONFIG3_ANAPARAM_WRITE;
 	rtl818x_iowrite8(priv, &priv->map->CONFIG3, reg);
 	rtl818x_iowrite8(priv, &priv->map->EEPROM_CMD,
@@ -786,7 +785,7 @@ static int rtl8187b_init_hw(struct ieee80211_hw *dev)
 	rtl818x_iowrite16(priv, (__le16 *)0xFF34, 0x0FFF);
 
 	reg = rtl818x_ioread8(priv, &priv->map->CW_CONF);
-	reg |= RTL818X_CW_CONF_PERPACKET_RETRY_SHIFT;
+	reg |= RTL818X_CW_CONF_PERPACKET_RETRY;
 	rtl818x_iowrite8(priv, &priv->map->CW_CONF, reg);
 
 	/* Auto Rate Fallback Register (ARFR): 1M-54M setting */
@@ -944,8 +943,8 @@ static int rtl8187_start(struct ieee80211_hw *dev)
 		rtl818x_iowrite32(priv, &priv->map->RX_CONF, reg);
 
 		reg = rtl818x_ioread8(priv, &priv->map->TX_AGC_CTL);
-		reg &= ~RTL818X_TX_AGC_CTL_PERPACKET_GAIN_SHIFT;
-		reg &= ~RTL818X_TX_AGC_CTL_PERPACKET_ANTSEL_SHIFT;
+		reg &= ~RTL818X_TX_AGC_CTL_PERPACKET_GAIN;
+		reg &= ~RTL818X_TX_AGC_CTL_PERPACKET_ANTSEL;
 		reg &= ~RTL818X_TX_AGC_CTL_FEEDBACK_ANT;
 		rtl818x_iowrite8(priv, &priv->map->TX_AGC_CTL, reg);
 
@@ -987,13 +986,13 @@ static int rtl8187_start(struct ieee80211_hw *dev)
 	rtl818x_iowrite32(priv, &priv->map->RX_CONF, reg);
 
 	reg = rtl818x_ioread8(priv, &priv->map->CW_CONF);
-	reg &= ~RTL818X_CW_CONF_PERPACKET_CW_SHIFT;
-	reg |= RTL818X_CW_CONF_PERPACKET_RETRY_SHIFT;
+	reg &= ~RTL818X_CW_CONF_PERPACKET_CW;
+	reg |= RTL818X_CW_CONF_PERPACKET_RETRY;
 	rtl818x_iowrite8(priv, &priv->map->CW_CONF, reg);
 
 	reg = rtl818x_ioread8(priv, &priv->map->TX_AGC_CTL);
-	reg &= ~RTL818X_TX_AGC_CTL_PERPACKET_GAIN_SHIFT;
-	reg &= ~RTL818X_TX_AGC_CTL_PERPACKET_ANTSEL_SHIFT;
+	reg &= ~RTL818X_TX_AGC_CTL_PERPACKET_GAIN;
+	reg &= ~RTL818X_TX_AGC_CTL_PERPACKET_ANTSEL;
 	reg &= ~RTL818X_TX_AGC_CTL_FEEDBACK_ANT;
 	rtl818x_iowrite8(priv, &priv->map->TX_AGC_CTL, reg);
 
@@ -1637,10 +1636,10 @@ static int rtl8187_probe(struct usb_interface *intf,
 
  err_free_dmabuf:
 	kfree(priv->io_dmabuf);
- err_free_dev:
-	ieee80211_free_hw(dev);
 	usb_set_intfdata(intf, NULL);
 	usb_put_dev(udev);
+ err_free_dev:
+	ieee80211_free_hw(dev);
 	return err;
 }
 

@@ -110,7 +110,7 @@ static int sd_suspend_runtime(struct device *);
 static int sd_resume(struct device *);
 static void sd_rescan(struct device *);
 static int sd_done(struct scsi_cmnd *);
-static int sd_eh_action(struct scsi_cmnd *, unsigned char *, int, int);
+static int sd_eh_action(struct scsi_cmnd *, int);
 static void sd_read_capacity(struct scsi_disk *sdkp, unsigned char *buffer);
 static void scsi_disk_release(struct device *cdev);
 static void sd_print_sense_hdr(struct scsi_disk *, struct scsi_sense_hdr *);
@@ -801,7 +801,7 @@ static int sd_setup_write_same_cmnd(struct scsi_device *sdp, struct request *rq)
 	if (sdkp->device->no_write_same)
 		return BLKPREP_KILL;
 
-	BUG_ON(bio_offset(bio) || bio_iovec(bio)->bv_len != sdp->sector_size);
+	BUG_ON(bio_offset(bio) || bio_iovec(bio).bv_len != sdp->sector_size);
 
 	sector >>= ilog2(sdp->sector_size) - 9;
 	nr_sectors >>= ilog2(sdp->sector_size) - 9;
@@ -1463,8 +1463,8 @@ static int sd_sync_cache(struct scsi_disk *sdkp)
 			sd_print_sense_hdr(sdkp, &sshdr);
 		/* we need to evaluate the error return  */
 		if (scsi_sense_valid(&sshdr) &&
-			/* 0x3a is medium not present */
-			sshdr.asc == 0x3a)
+			(sshdr.asc == 0x3a ||	/* medium not present */
+			 sshdr.asc == 0x20))	/* invalid command */
 				/* this is no error here */
 				return 0;
 
@@ -1551,23 +1551,23 @@ static const struct block_device_operations sd_fops = {
 /**
  *	sd_eh_action - error handling callback
  *	@scmd:		sd-issued command that has failed
- *	@eh_cmnd:	The command that was sent during error handling
- *	@eh_cmnd_len:	Length of eh_cmnd in bytes
  *	@eh_disp:	The recovery disposition suggested by the midlayer
  *
- *	This function is called by the SCSI midlayer upon completion of
- *	an error handling command (TEST UNIT READY, START STOP UNIT,
- *	etc.) The command sent to the device by the error handler is
- *	stored in eh_cmnd. The result of sending the eh command is
- *	passed in eh_disp.
+ *	This function is called by the SCSI midlayer upon completion of an
+ *	error test command (currently TEST UNIT READY). The result of sending
+ *	the eh command is passed in eh_disp.  We're looking for devices that
+ *	fail medium access commands but are OK with non access commands like
+ *	test unit ready (so wrongly see the device as having a successful
+ *	recovery)
  **/
-static int sd_eh_action(struct scsi_cmnd *scmd, unsigned char *eh_cmnd,
-			int eh_cmnd_len, int eh_disp)
+static int sd_eh_action(struct scsi_cmnd *scmd, int eh_disp)
 {
 	struct scsi_disk *sdkp = scsi_disk(scmd->request->rq_disk);
 
 	if (!scsi_device_online(scmd->device) ||
-	    !scsi_medium_access_command(scmd))
+	    !scsi_medium_access_command(scmd) ||
+	    host_byte(scmd->result) != DID_TIME_OUT ||
+	    eh_disp != SUCCESS)
 		return eh_disp;
 
 	/*
@@ -1577,9 +1577,7 @@ static int sd_eh_action(struct scsi_cmnd *scmd, unsigned char *eh_cmnd,
 	 * process of recovering or has it suffered an internal failure
 	 * that prevents access to the storage medium.
 	 */
-	if (host_byte(scmd->result) == DID_TIME_OUT && eh_disp == SUCCESS &&
-	    eh_cmnd_len && eh_cmnd[0] == TEST_UNIT_READY)
-		sdkp->medium_access_timed_out++;
+	sdkp->medium_access_timed_out++;
 
 	/*
 	 * If the device keeps failing read/write commands but TEST UNIT
@@ -1628,7 +1626,7 @@ static unsigned int sd_completed_bytes(struct scsi_cmnd *scmd)
 		end_lba <<= 1;
 	} else {
 		/* be careful ... don't want any overflows */
-		u64 factor = scmd->device->sector_size / 512;
+		unsigned int factor = scmd->device->sector_size / 512;
 		do_div(start_lba, factor);
 		do_div(end_lba, factor);
 	}
@@ -2283,7 +2281,7 @@ sd_read_write_protect_flag(struct scsi_disk *sdkp, unsigned char *buffer)
 
 	set_disk_ro(sdkp->disk, 0);
 	if (sdp->skip_ms_page_3f) {
-		sd_printk(KERN_NOTICE, sdkp, "Assuming Write Enabled\n");
+		sd_first_printk(KERN_NOTICE, sdkp, "Assuming Write Enabled\n");
 		return;
 	}
 
@@ -2315,7 +2313,7 @@ sd_read_write_protect_flag(struct scsi_disk *sdkp, unsigned char *buffer)
 	}
 
 	if (!scsi_status_is_good(res)) {
-		sd_printk(KERN_WARNING, sdkp,
+		sd_first_printk(KERN_WARNING, sdkp,
 			  "Test WP failed, assume Write Enabled\n");
 	} else {
 		sdkp->write_prot = ((data.device_specific & 0x80) != 0);
@@ -2383,7 +2381,8 @@ sd_read_cache_type(struct scsi_disk *sdkp, unsigned char *buffer)
 	if (!data.header_length) {
 		modepage = 6;
 		first_len = 0;
-		sd_printk(KERN_ERR, sdkp, "Missing header in MODE_SENSE response\n");
+		sd_first_printk(KERN_ERR, sdkp,
+				"Missing header in MODE_SENSE response\n");
 	}
 
 	/* that went OK, now ask for the proper length */
@@ -2396,7 +2395,7 @@ sd_read_cache_type(struct scsi_disk *sdkp, unsigned char *buffer)
 	if (len < 3)
 		goto bad_sense;
 	else if (len > SD_BUF_SIZE) {
-		sd_printk(KERN_NOTICE, sdkp, "Truncating mode parameter "
+		sd_first_printk(KERN_NOTICE, sdkp, "Truncating mode parameter "
 			  "data from %d to %d bytes\n", len, SD_BUF_SIZE);
 		len = SD_BUF_SIZE;
 	}
@@ -2419,8 +2418,9 @@ sd_read_cache_type(struct scsi_disk *sdkp, unsigned char *buffer)
 				/* We're interested only in the first 3 bytes.
 				 */
 				if (len - offset <= 2) {
-					sd_printk(KERN_ERR, sdkp, "Incomplete "
-						  "mode parameter data\n");
+					sd_first_printk(KERN_ERR, sdkp,
+						"Incomplete mode parameter "
+							"data\n");
 					goto defaults;
 				} else {
 					modepage = page_code;
@@ -2434,14 +2434,15 @@ sd_read_cache_type(struct scsi_disk *sdkp, unsigned char *buffer)
 				else if (!spf && len - offset > 1)
 					offset += 2 + buffer[offset+1];
 				else {
-					sd_printk(KERN_ERR, sdkp, "Incomplete "
-						  "mode parameter data\n");
+					sd_first_printk(KERN_ERR, sdkp,
+							"Incomplete mode "
+							"parameter data\n");
 					goto defaults;
 				}
 			}
 		}
 
-		sd_printk(KERN_ERR, sdkp, "No Caching mode page found\n");
+		sd_first_printk(KERN_ERR, sdkp, "No Caching mode page found\n");
 		goto defaults;
 
 	Page_found:
@@ -2455,7 +2456,7 @@ sd_read_cache_type(struct scsi_disk *sdkp, unsigned char *buffer)
 
 		sdkp->DPOFUA = (data.device_specific & 0x10) != 0;
 		if (sdkp->DPOFUA && !sdkp->device->use_10_for_rw) {
-			sd_printk(KERN_NOTICE, sdkp,
+			sd_first_printk(KERN_NOTICE, sdkp,
 				  "Uses READ/WRITE(6), disabling FUA\n");
 			sdkp->DPOFUA = 0;
 		}
@@ -2477,16 +2478,19 @@ bad_sense:
 	    sshdr.sense_key == ILLEGAL_REQUEST &&
 	    sshdr.asc == 0x24 && sshdr.ascq == 0x0)
 		/* Invalid field in CDB */
-		sd_printk(KERN_NOTICE, sdkp, "Cache data unavailable\n");
+		sd_first_printk(KERN_NOTICE, sdkp, "Cache data unavailable\n");
 	else
-		sd_printk(KERN_ERR, sdkp, "Asking for cache data failed\n");
+		sd_first_printk(KERN_ERR, sdkp,
+				"Asking for cache data failed\n");
 
 defaults:
 	if (sdp->wce_default_on) {
-		sd_printk(KERN_NOTICE, sdkp, "Assuming drive cache: write back\n");
+		sd_first_printk(KERN_NOTICE, sdkp,
+				"Assuming drive cache: write back\n");
 		sdkp->WCE = 1;
 	} else {
-		sd_printk(KERN_ERR, sdkp, "Assuming drive cache: write through\n");
+		sd_first_printk(KERN_ERR, sdkp,
+				"Assuming drive cache: write through\n");
 		sdkp->WCE = 0;
 	}
 	sdkp->RCD = 0;
@@ -2515,7 +2519,7 @@ static void sd_read_app_tag_own(struct scsi_disk *sdkp, unsigned char *buffer)
 
 	if (!scsi_status_is_good(res) || !data.header_length ||
 	    data.length < 6) {
-		sd_printk(KERN_WARNING, sdkp,
+		sd_first_printk(KERN_WARNING, sdkp,
 			  "getting Control mode page failed, assume no ATO\n");
 
 		if (scsi_sense_valid(&sshdr))
@@ -2527,7 +2531,7 @@ static void sd_read_app_tag_own(struct scsi_disk *sdkp, unsigned char *buffer)
 	offset = data.header_length + data.block_descriptor_length;
 
 	if ((buffer[offset] & 0x3f) != 0x0a) {
-		sd_printk(KERN_ERR, sdkp, "ATO Got wrong page\n");
+		sd_first_printk(KERN_ERR, sdkp, "ATO Got wrong page\n");
 		return;
 	}
 
@@ -3022,6 +3026,7 @@ static int sd_remove(struct device *dev)
 	devt = disk_devt(sdkp->disk);
 	scsi_autopm_get_device(sdkp->device);
 
+	async_synchronize_full_domain(&scsi_sd_pm_domain);
 	async_synchronize_full_domain(&scsi_sd_probe_domain);
 	blk_queue_prep_rq(sdkp->device->request_queue, scsi_prep_fn);
 	blk_queue_unprep_rq(sdkp->device->request_queue, NULL);

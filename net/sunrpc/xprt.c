@@ -749,6 +749,11 @@ static void xprt_connect_status(struct rpc_task *task)
 	}
 
 	switch (task->tk_status) {
+	case -ECONNREFUSED:
+	case -ECONNRESET:
+	case -ECONNABORTED:
+	case -ENETUNREACH:
+	case -EHOSTUNREACH:
 	case -EAGAIN:
 		dprintk("RPC: %5u xprt_connect_status: retrying\n", task->tk_pid);
 		break;
@@ -1188,7 +1193,7 @@ static inline __be32 xprt_alloc_xid(struct rpc_xprt *xprt)
 
 static inline void xprt_init_xid(struct rpc_xprt *xprt)
 {
-	xprt->xid = net_random();
+	xprt->xid = prandom_u32();
 }
 
 static void xprt_request_init(struct rpc_task *task, struct rpc_xprt *xprt)
@@ -1377,16 +1382,4 @@ void xprt_put(struct rpc_xprt *xprt)
 {
 	if (atomic_dec_and_test(&xprt->count))
 		xprt_destroy(xprt);
-}
-
-/**
- * xprt_get - return a reference to an RPC transport.
- * @xprt: pointer to the transport
- *
- */
-struct rpc_xprt *xprt_get(struct rpc_xprt *xprt)
-{
-	if (atomic_inc_not_zero(&xprt->count))
-		return xprt;
-	return NULL;
 }

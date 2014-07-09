@@ -8,12 +8,12 @@
 
 #include <linux/module.h>
 #include <linux/dma-mapping.h>
+#include <linux/clk/at91_pmc.h>
 
 #include <asm/irq.h>
 #include <asm/mach/arch.h>
 #include <asm/mach/map.h>
 #include <mach/at91sam9n12.h>
-#include <mach/at91_pmc.h>
 #include <mach/cpu.h>
 
 #include "board.h"
@@ -182,6 +182,7 @@ static struct clk_lookup periph_clocks_lookups[] = {
 	/* additional fake clock for macb_hclk */
 	CLKDEV_CON_DEV_ID("hclk", "500000.ohci", &uhp_clk),
 	CLKDEV_CON_DEV_ID("ohci_clk", "500000.ohci", &uhp_clk),
+	CLKDEV_CON_DEV_ID(NULL, "f8034000.pwm", &pwm_clk),
 };
 
 /*

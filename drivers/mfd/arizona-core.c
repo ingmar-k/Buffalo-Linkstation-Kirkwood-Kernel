@@ -251,8 +251,6 @@ static int arizona_apply_hardware_patch(struct arizona* arizona)
 	unsigned int fll, sysclk;
 	int ret, err;
 
-	regcache_cache_bypass(arizona->regmap, true);
-
 	/* Cache existing FLL and SYSCLK settings */
 	ret = regmap_read(arizona->regmap, ARIZONA_FLL1_CONTROL_1, &fll);
 	if (ret != 0) {
@@ -321,8 +319,6 @@ err_fll:
 			"Failed to re-apply old FLL settings: %d\n",
 			err);
 	}
-
-	regcache_cache_bypass(arizona->regmap, false);
 
 	if (ret != 0)
 		return ret;
@@ -565,7 +561,7 @@ static inline int arizona_of_get_core_pdata(struct arizona *arizona)
 }
 #endif
 
-static struct mfd_cell early_devs[] = {
+static const struct mfd_cell early_devs[] = {
 	{ .name = "arizona-ldo1" },
 };
 
@@ -577,7 +573,7 @@ static const char *wm5102_supplies[] = {
 	"SPKVDDR",
 };
 
-static struct mfd_cell wm5102_devs[] = {
+static const struct mfd_cell wm5102_devs[] = {
 	{ .name = "arizona-micsupp" },
 	{ .name = "arizona-extcon" },
 	{ .name = "arizona-gpio" },
@@ -590,7 +586,7 @@ static struct mfd_cell wm5102_devs[] = {
 	},
 };
 
-static struct mfd_cell wm5110_devs[] = {
+static const struct mfd_cell wm5110_devs[] = {
 	{ .name = "arizona-micsupp" },
 	{ .name = "arizona-extcon" },
 	{ .name = "arizona-gpio" },
@@ -609,7 +605,7 @@ static const char *wm8997_supplies[] = {
 	"SPKVDD",
 };
 
-static struct mfd_cell wm8997_devs[] = {
+static const struct mfd_cell wm8997_devs[] = {
 	{ .name = "arizona-micsupp" },
 	{ .name = "arizona-extcon" },
 	{ .name = "arizona-gpio" },

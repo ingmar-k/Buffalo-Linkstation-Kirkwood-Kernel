@@ -50,13 +50,13 @@
 #include "cxgb4_uld.h"
 
 #define T4FW_VERSION_MAJOR 0x01
-#define T4FW_VERSION_MINOR 0x06
-#define T4FW_VERSION_MICRO 0x18
+#define T4FW_VERSION_MINOR 0x09
+#define T4FW_VERSION_MICRO 0x17
 #define T4FW_VERSION_BUILD 0x00
 
 #define T5FW_VERSION_MAJOR 0x01
-#define T5FW_VERSION_MINOR 0x08
-#define T5FW_VERSION_MICRO 0x1C
+#define T5FW_VERSION_MINOR 0x09
+#define T5FW_VERSION_MICRO 0x17
 #define T5FW_VERSION_BUILD 0x00
 
 #define CH_WARN(adap, fmt, ...) dev_warn(adap->pdev_dev, fmt, ## __VA_ARGS__)
@@ -66,6 +66,7 @@ enum {
 	SERNUM_LEN = 24,    /* Serial # length */
 	EC_LEN     = 16,    /* E/C length */
 	ID_LEN     = 16,    /* ID length */
+	PN_LEN     = 16,    /* Part Number length */
 };
 
 enum {
@@ -254,6 +255,7 @@ struct vpd_params {
 	u8 ec[EC_LEN + 1];
 	u8 sn[SERNUM_LEN + 1];
 	u8 id[ID_LEN + 1];
+	u8 pn[PN_LEN + 1];
 };
 
 struct pci_params {
@@ -306,6 +308,7 @@ struct adapter_params {
 	unsigned char bypass;
 
 	unsigned int ofldq_wr_cred;
+	bool ulptx_memwrite_dsgl;          /* use of T5 DSGL allowed */
 };
 
 #include "t4fw_api.h"
@@ -387,8 +390,9 @@ struct work_struct;
 
 enum {                                 /* adapter flags */
 	FULL_INIT_DONE     = (1 << 0),
-	USING_MSI          = (1 << 1),
-	USING_MSIX         = (1 << 2),
+	DEV_ENABLED        = (1 << 1),
+	USING_MSI          = (1 << 2),
+	USING_MSIX         = (1 << 3),
 	FW_OK              = (1 << 4),
 	RSS_TNLALLLOOKUP   = (1 << 5),
 	USING_SOFT_PARAMS  = (1 << 6),
@@ -496,6 +500,7 @@ struct sge_txq {
 	spinlock_t db_lock;
 	int db_disabled;
 	unsigned short db_pidx;
+	unsigned short db_pidx_inc;
 	u64 udb;
 };
 
@@ -552,8 +557,13 @@ struct sge {
 	u32 pktshift;               /* padding between CPL & packet data */
 	u32 fl_align;               /* response queue message alignment */
 	u32 fl_starve_thres;        /* Free List starvation threshold */
-	unsigned int starve_thres;
-	u8 idma_state[2];
+
+	/* State variables for detecting an SGE Ingress DMA hang */
+	unsigned int idma_1s_thresh;/* SGE same State Counter 1s threshold */
+	unsigned int idma_stalled[2];/* SGE synthesized stalled timers in HZ */
+	unsigned int idma_state[2]; /* SGE IDMA Hang detect state */
+	unsigned int idma_qid[2];   /* SGE IDMA Hung Ingress Queue ID */
+
 	unsigned int egr_start;
 	unsigned int ingr_start;
 	void *egr_map[MAX_EGRQ];    /* qid->queue egress queue map */
@@ -938,7 +948,6 @@ int t4_seeprom_wp(struct adapter *adapter, bool enable);
 int get_vpd_params(struct adapter *adapter, struct vpd_params *p);
 int t4_load_fw(struct adapter *adapter, const u8 *fw_data, unsigned int size);
 unsigned int t4_flash_cfg_addr(struct adapter *adapter);
-int t4_load_cfg(struct adapter *adapter, const u8 *cfg_data, unsigned int size);
 int t4_get_fw_version(struct adapter *adapter, u32 *vers);
 int t4_get_tp_version(struct adapter *adapter, u32 *vers);
 int t4_prep_fw(struct adapter *adap, struct fw_info *fw_info,
@@ -957,7 +966,7 @@ int t4_mc_read(struct adapter *adap, int idx, u32 addr, __be32 *data,
 	       u64 *parity);
 int t4_edc_read(struct adapter *adap, int idx, u32 addr, __be32 *data,
 		u64 *parity);
-
+const char *t4_get_port_type_description(enum fw_port_type port_type);
 void t4_get_port_stats(struct adapter *adap, int idx, struct port_stats *p);
 void t4_read_mtu_tbl(struct adapter *adap, u16 *mtus, u8 *mtu_log);
 void t4_tp_wr_bits_indirect(struct adapter *adap, unsigned int addr,
@@ -979,13 +988,6 @@ int t4_fw_hello(struct adapter *adap, unsigned int mbox, unsigned int evt_mbox,
 int t4_fw_bye(struct adapter *adap, unsigned int mbox);
 int t4_early_init(struct adapter *adap, unsigned int mbox);
 int t4_fw_reset(struct adapter *adap, unsigned int mbox, int reset);
-int t4_fw_halt(struct adapter *adap, unsigned int mbox, int force);
-int t4_fw_restart(struct adapter *adap, unsigned int mbox, int reset);
-int t4_fw_upgrade(struct adapter *adap, unsigned int mbox,
-		  const u8 *fw_data, unsigned int size, int force);
-int t4_fw_config_file(struct adapter *adap, unsigned int mbox,
-		      unsigned int mtype, unsigned int maddr,
-		      u32 *finiver, u32 *finicsum, u32 *cfcsum);
 int t4_fixup_host_params(struct adapter *adap, unsigned int page_size,
 			  unsigned int cache_line_size);
 int t4_fw_initialize(struct adapter *adap, unsigned int mbox);
@@ -1036,4 +1038,5 @@ void t4_db_dropped(struct adapter *adapter);
 int t4_mem_win_read_len(struct adapter *adap, u32 addr, __be32 *data, int len);
 int t4_fwaddrspace_write(struct adapter *adap, unsigned int mbox,
 			 u32 addr, u32 val);
+void t4_sge_decode_idma_state(struct adapter *adapter, int state);
 #endif /* __CXGB4_H__ */

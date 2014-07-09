@@ -14,7 +14,6 @@
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/err.h>
-#include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/cpufreq.h>
 #include <linux/device.h>
@@ -735,11 +734,9 @@ int of_init_opp_table(struct device *dev)
 		unsigned long freq = be32_to_cpup(val++) * 1000;
 		unsigned long volt = be32_to_cpup(val++);
 
-		if (dev_pm_opp_add(dev, freq, volt)) {
+		if (dev_pm_opp_add(dev, freq, volt))
 			dev_warn(dev, "%s: Failed to add OPP %ld\n",
 				 __func__, freq);
-			continue;
-		}
 		nr -= 2;
 	}
 

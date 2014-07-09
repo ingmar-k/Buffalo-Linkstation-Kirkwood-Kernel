@@ -101,6 +101,7 @@ static struct machine *setup_fake_machine(struct machines *machines)
 			.mmap = {
 				.header = { .misc = PERF_RECORD_MISC_USER, },
 				.pid = fake_mmap_info[i].pid,
+				.tid = fake_mmap_info[i].pid,
 				.start = fake_mmap_info[i].start,
 				.len = 0x1000ULL,
 				.pgoff = 0ULL,
@@ -208,7 +209,7 @@ static int add_hist_entries(struct perf_evlist *evlist, struct machine *machine)
 	 * However the second evsel also has a collapsed entry for
 	 * "bash [libc] malloc" so total 9 entries will be in the tree.
 	 */
-	list_for_each_entry(evsel, &evlist->entries, node) {
+	evlist__for_each(evlist, evsel) {
 		for (k = 0; k < ARRAY_SIZE(fake_common_samples); k++) {
 			const union perf_event event = {
 				.header = {
@@ -466,7 +467,7 @@ int test__hists_link(void)
 	if (err < 0)
 		goto out;
 
-	list_for_each_entry(evsel, &evlist->entries, node) {
+	evlist__for_each(evlist, evsel) {
 		hists__collapse_resort(&evsel->hists, NULL);
 
 		if (verbose > 2)

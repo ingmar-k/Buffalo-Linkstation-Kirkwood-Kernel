@@ -41,6 +41,7 @@
 #include "wpactl.h"
 #include "control.h"
 #include "rndis.h"
+#include "baseband.h"
 
 static const long frequency_list[] = {
 	2412, 2417, 2422, 2427, 2432, 2437, 2442, 2447, 2452, 2457, 2462, 2467, 2472, 2484,
@@ -57,10 +58,7 @@ struct iw_statistics *iwctl_get_wireless_stats(struct net_device *dev)
 	struct vnt_private *pDevice = netdev_priv(dev);
 	long ldBm;
 
-	pDevice->wstats.status = pDevice->eOPMode;
-	if (pDevice->scStatistic.LinkQuality > 100)
-		pDevice->scStatistic.LinkQuality = 100;
-	pDevice->wstats.qual.qual = (u8)pDevice->scStatistic.LinkQuality;
+	pDevice->wstats.status = pDevice->op_mode;
 	RFvRSSITodBm(pDevice, (u8)(pDevice->uCurrRSSI), &ldBm);
 	pDevice->wstats.qual.level = ldBm;
 	pDevice->wstats.qual.noise = 0;
@@ -68,7 +66,6 @@ struct iw_statistics *iwctl_get_wireless_stats(struct net_device *dev)
 	pDevice->wstats.discard.nwid = 0;
 	pDevice->wstats.discard.code = 0;
 	pDevice->wstats.discard.fragment = 0;
-	pDevice->wstats.discard.retries = pDevice->scStatistic.dwTsrErr;
 	pDevice->wstats.discard.misc = 0;
 	pDevice->wstats.miss.beacon = 0;
 	return &pDevice->wstats;
@@ -728,10 +725,10 @@ int iwctl_giwaplist(struct net_device *dev, struct iw_request_info *info,
 	if (!wrq->pointer)
 		return -EINVAL;
 
-	sock = kzalloc(sizeof(struct sockaddr) * IW_MAX_AP, GFP_KERNEL);
+	sock = kcalloc(IW_MAX_AP, sizeof(struct sockaddr), GFP_KERNEL);
 	if (sock == NULL)
 		return -ENOMEM;
-	qual = kzalloc(sizeof(struct iw_quality) * IW_MAX_AP, GFP_KERNEL);
+	qual = kcalloc(IW_MAX_AP, sizeof(struct iw_quality), GFP_KERNEL);
 	if (qual == NULL) {
 		kfree(sock);
 		return -ENOMEM;
@@ -1398,7 +1395,8 @@ int iwctl_giwpower(struct net_device *dev, struct iw_request_info *info,
 	if (pMgmt == NULL)
 		return -EFAULT;
 
-	if ((wrq->disabled = (mode == WMAC_POWER_CAM)))
+	wrq->disabled = (mode == WMAC_POWER_CAM);
+	if (wrq->disabled)
 		return 0;
 
 	if ((wrq->flags & IW_POWER_TYPE) == IW_POWER_TIMEOUT) {
@@ -1568,10 +1566,8 @@ int iwctl_siwgenie(struct net_device *dev, struct iw_request_info *info,
 			goto out;
 		}
 		memset(pMgmt->abyWPAIE, 0, MAX_WPA_IE_LEN);
-		if (copy_from_user(pMgmt->abyWPAIE, extra, wrq->length)) {
-			ret = -EFAULT;
-			goto out;
-		}
+
+		memcpy(pMgmt->abyWPAIE, extra, wrq->length);
 		pMgmt->wWPAIELen = wrq->length;
 	} else {
 		memset(pMgmt->abyWPAIE, 0, MAX_WPA_IE_LEN);
@@ -1597,13 +1593,11 @@ int iwctl_giwgenie(struct net_device *dev, struct iw_request_info *info,
 	wrq->length = 0;
 	if (pMgmt->wWPAIELen > 0) {
 		wrq->length = pMgmt->wWPAIELen;
-		if (pMgmt->wWPAIELen <= space) {
-			if (copy_to_user(extra, pMgmt->abyWPAIE, pMgmt->wWPAIELen)) {
-				ret = -EFAULT;
-			}
-		} else {
+
+		if (pMgmt->wWPAIELen <= space)
+			memcpy(extra, pMgmt->abyWPAIE, pMgmt->wWPAIELen);
+		else
 			ret = -E2BIG;
-		}
 	}
 	return ret;
 }

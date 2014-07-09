@@ -5,7 +5,7 @@
  *
  * GPL LICENSE SUMMARY
  *
- * Copyright(c) 2012 - 2013 Intel Corporation. All rights reserved.
+ * Copyright(c) 2012 - 2014 Intel Corporation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -30,7 +30,7 @@
  *
  * BSD LICENSE
  *
- * Copyright(c) 2012 - 2013 Intel Corporation. All rights reserved.
+ * Copyright(c) 2012 - 2014 Intel Corporation. All rights reserved.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -183,9 +183,9 @@ enum iwl_scan_type {
  *	this number of packets were received (typically 1)
  * @passive2active: is auto switching from passive to active during scan allowed
  * @rxchain_sel_flags: RXON_RX_CHAIN_*
- * @max_out_time: in usecs, max out of serving channel time
+ * @max_out_time: in TUs, max out of serving channel time
  * @suspend_time: how long to pause scan when returning to service channel:
- *	bits 0-19: beacon interal in usecs (suspend before executing)
+ *	bits 0-19: beacon interal in TUs (suspend before executing)
  *	bits 20-23: reserved
  *	bits 24-31: number of beacons (suspend between channels)
  * @rxon_flags: RXON_FLG_*
@@ -383,8 +383,8 @@ enum scan_framework_client {
  * @quiet_plcp_th:	quiet channel num of packets threshold
  * @good_CRC_th:	passive to active promotion threshold
  * @rx_chain:		RXON rx chain.
- * @max_out_time:	max uSec to be out of assoceated channel
- * @suspend_time:	pause scan this long when returning to service channel
+ * @max_out_time:	max TUs to be out of assoceated channel
+ * @suspend_time:	pause scan this TUs when returning to service channel
  * @flags:		RXON flags
  * @filter_flags:	RXONfilter
  * @tx_cmd:		tx command for active scan; for 2GHz and for 5GHz.
@@ -504,6 +504,7 @@ struct iwl_scan_offload_profile {
  * @match_notify:	clients waiting for match found notification
  * @pass_match:		clients waiting for the results
  * @active_clients:	active clients bitmap - enum scan_framework_client
+ * @any_beacon_notify:	clients waiting for match notification without match
  */
 struct iwl_scan_offload_profile_cfg {
 	struct iwl_scan_offload_profile profiles[IWL_SCAN_MAX_PROFILES];
@@ -512,7 +513,8 @@ struct iwl_scan_offload_profile_cfg {
 	u8 match_notify;
 	u8 pass_match;
 	u8 active_clients;
-	u8 reserved[3];
+	u8 any_beacon_notify;
+	u8 reserved[2];
 } __packed;
 
 /**
@@ -530,14 +532,13 @@ struct iwl_scan_offload_schedule {
 /*
  * iwl_scan_offload_flags
  *
- * IWL_SCAN_OFFLOAD_FLAG_FILTER_SSID: filter mode - upload every beacon or match
- *	ssid list.
+ * IWL_SCAN_OFFLOAD_FLAG_PASS_ALL: pass all results - no filtering.
  * IWL_SCAN_OFFLOAD_FLAG_CACHED_CHANNEL: add cached channels to partial scan.
  * IWL_SCAN_OFFLOAD_FLAG_ENERGY_SCAN: use energy based scan before partial scan
  *	on A band.
  */
 enum iwl_scan_offload_flags {
-	IWL_SCAN_OFFLOAD_FLAG_FILTER_SSID	= BIT(0),
+	IWL_SCAN_OFFLOAD_FLAG_PASS_ALL		= BIT(0),
 	IWL_SCAN_OFFLOAD_FLAG_CACHED_CHANNEL	= BIT(2),
 	IWL_SCAN_OFFLOAD_FLAG_ENERGY_SCAN	= BIT(3),
 };

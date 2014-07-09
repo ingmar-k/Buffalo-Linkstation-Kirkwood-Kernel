@@ -51,7 +51,8 @@ void ath10k_txrx_tx_unref(struct ath10k_htt *htt,
 	struct ieee80211_tx_info *info;
 	struct ath10k_skb_cb *skb_cb;
 	struct sk_buff *msdu;
-	int ret;
+
+	lockdep_assert_held(&htt->tx_lock);
 
 	ath10k_dbg(ATH10K_DBG_HTT, "htt tx completion msdu_id %u discard %d no_ack %d\n",
 		   tx_done->msdu_id, !!tx_done->discard, !!tx_done->no_ack);
@@ -65,16 +66,17 @@ void ath10k_txrx_tx_unref(struct ath10k_htt *htt,
 	msdu = htt->pending_tx[tx_done->msdu_id];
 	skb_cb = ATH10K_SKB_CB(msdu);
 
-	ret = ath10k_skb_unmap(dev, msdu);
-	if (ret)
-		ath10k_warn("data skb unmap failed (%d)\n", ret);
+	dma_unmap_single(dev, skb_cb->paddr, msdu->len, DMA_TO_DEVICE);
 
-	if (skb_cb->htt.frag_len)
-		skb_pull(msdu, skb_cb->htt.frag_len + skb_cb->htt.pad_len);
+	if (skb_cb->htt.txbuf)
+		dma_pool_free(htt->tx_pool,
+			      skb_cb->htt.txbuf,
+			      skb_cb->htt.txbuf_paddr);
 
 	ath10k_report_offchan_tx(htt->ar, msdu);
 
 	info = IEEE80211_SKB_CB(msdu);
+	memset(&info->status, 0, sizeof(info->status));
 
 	if (tx_done->discard) {
 		ieee80211_free_txskb(htt->ar->hw, msdu);
@@ -91,13 +93,11 @@ void ath10k_txrx_tx_unref(struct ath10k_htt *htt,
 	/* we do not own the msdu anymore */
 
 exit:
-	spin_lock_bh(&htt->tx_lock);
 	htt->pending_tx[tx_done->msdu_id] = NULL;
 	ath10k_htt_tx_free_msdu_id(htt, tx_done->msdu_id);
 	__ath10k_htt_tx_dec_pending(htt);
 	if (htt->num_pending_tx == 0)
 		wake_up(&htt->empty_tx_wq);
-	spin_unlock_bh(&htt->tx_lock);
 }
 
 static const u8 rx_legacy_rate_idx[] = {
@@ -183,7 +183,7 @@ static void process_rx_rates(struct ath10k *ar, struct htt_rx_info *info,
 		/* VHT-SIG-A1 in info 1, VHT-SIG-A2 in info2
 		   TODO check this */
 		mcs = (info2 >> 4) & 0x0F;
-		nss = (info1 >> 10) & 0x07;
+		nss = ((info1 >> 10) & 0x07) + 1;
 		bw = info1 & 3;
 		sgi = info2 & 1;
 
@@ -203,7 +203,7 @@ static void process_rx_rates(struct ath10k *ar, struct htt_rx_info *info,
 			break;
 		/* 80MHZ */
 		case 2:
-			status->flag |= RX_FLAG_80MHZ;
+			status->vht_flag |= RX_VHT_FLAG_80MHZ;
 		}
 
 		status->flag |= RX_FLAG_VHT;
@@ -230,11 +230,14 @@ void ath10k_process_rx(struct ath10k *ar, struct htt_rx_info *info)
 				~IEEE80211_FCTL_PROTECTED);
 	}
 
-	if (info->status == HTT_RX_IND_MPDU_STATUS_TKIP_MIC_ERR)
+	if (info->mic_err)
 		status->flag |= RX_FLAG_MMIC_ERROR;
 
 	if (info->fcs_err)
 		status->flag |= RX_FLAG_FAILED_FCS_CRC;
+
+	if (info->amsdu_more)
+		status->flag |= RX_FLAG_AMSDU_MORE;
 
 	status->signal = info->signal;
 
@@ -254,20 +257,26 @@ void ath10k_process_rx(struct ath10k *ar, struct htt_rx_info *info)
 	status->band = ch->band;
 	status->freq = ch->center_freq;
 
+	if (info->rate.info0 & HTT_RX_INDICATION_INFO0_END_VALID) {
+		/* TSF available only in 32-bit */
+		status->mactime = info->tsf & 0xffffffff;
+		status->flag |= RX_FLAG_MACTIME_END;
+	}
+
 	ath10k_dbg(ATH10K_DBG_DATA,
-		   "rx skb %p len %u %s%s%s%s%s %srate_idx %u vht_nss %u freq %u band %u\n",
+		   "rx skb %p len %u %s%s%s%s%s %srate_idx %u vht_nss %u freq %u band %u flag 0x%x fcs-err %i\n",
 		   info->skb,
 		   info->skb->len,
 		   status->flag == 0 ? "legacy" : "",
 		   status->flag & RX_FLAG_HT ? "ht" : "",
 		   status->flag & RX_FLAG_VHT ? "vht" : "",
 		   status->flag & RX_FLAG_40MHZ ? "40" : "",
-		   status->flag & RX_FLAG_80MHZ ? "80" : "",
+		   status->vht_flag & RX_VHT_FLAG_80MHZ ? "80" : "",
 		   status->flag & RX_FLAG_SHORT_GI ? "sgi " : "",
 		   status->rate_idx,
 		   status->vht_nss,
 		   status->freq,
-		   status->band);
+		   status->band, status->flag, info->fcs_err);
 	ath10k_dbg_dump(ATH10K_DBG_HTT_DUMP, NULL, "rx skb: ",
 			info->skb->data, info->skb->len);
 
@@ -374,7 +383,8 @@ void ath10k_peer_unmap_event(struct ath10k_htt *htt,
 	spin_lock_bh(&ar->data_lock);
 	peer = ath10k_peer_find_by_id(ar, ev->peer_id);
 	if (!peer) {
-		ath10k_warn("unknown peer id %d\n", ev->peer_id);
+		ath10k_warn("peer-unmap-event: unknown peer id %d\n",
+			    ev->peer_id);
 		goto exit;
 	}
 

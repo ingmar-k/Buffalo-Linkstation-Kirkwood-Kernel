@@ -35,9 +35,9 @@
 #include <linux/pm_runtime.h>
 
 #if defined(CONFIG_VGA_SWITCHEROO)
-bool radeon_is_px(void);
+bool radeon_has_atpx(void);
 #else
-static inline bool radeon_is_px(void) { return false; }
+static inline bool radeon_has_atpx(void) { return false; }
 #endif
 
 /**
@@ -107,6 +107,11 @@ int radeon_driver_load_kms(struct drm_device *dev, unsigned long flags)
 		flags |= RADEON_IS_PCI;
 	}
 
+	if ((radeon_runtime_pm != 0) &&
+	    radeon_has_atpx() &&
+	    ((flags & RADEON_IS_IGP) == 0))
+		flags |= RADEON_IS_PX;
+
 	/* radeon_device_init should report only fatal error
 	 * like memory allocation failure or iomapping failure,
 	 * or memory manager initialization failure, it must
@@ -137,8 +142,7 @@ int radeon_driver_load_kms(struct drm_device *dev, unsigned long flags)
 				"Error during ACPI methods call\n");
 	}
 
-	if ((radeon_runtime_pm == 1) ||
-	    ((radeon_runtime_pm == -1) && radeon_is_px())) {
+	if (radeon_is_px(dev)) {
 		pm_runtime_use_autosuspend(dev->dev);
 		pm_runtime_set_autosuspend_delay(dev->dev, 5000);
 		pm_runtime_set_active(dev->dev);
@@ -199,7 +203,7 @@ static void radeon_set_filp_rights(struct drm_device *dev,
  * etc. (all asics).
  * Returns 0 on success, -EINVAL on failure.
  */
-int radeon_info_ioctl(struct drm_device *dev, void *data, struct drm_file *filp)
+static int radeon_info_ioctl(struct drm_device *dev, void *data, struct drm_file *filp)
 {
 	struct radeon_device *rdev = dev->dev_private;
 	struct drm_radeon_info *info = data;
@@ -231,7 +235,7 @@ int radeon_info_ioctl(struct drm_device *dev, void *data, struct drm_file *filp)
 			*value = rdev->accel_working;
 		break;
 	case RADEON_INFO_CRTC_FROM_ID:
-		if (DRM_COPY_FROM_USER(value, value_ptr, sizeof(uint32_t))) {
+		if (copy_from_user(value, value_ptr, sizeof(uint32_t))) {
 			DRM_ERROR("copy_from_user %s:%u\n", __func__, __LINE__);
 			return -EFAULT;
 		}
@@ -277,7 +281,7 @@ int radeon_info_ioctl(struct drm_device *dev, void *data, struct drm_file *filp)
 		 *
 		 * When returning, the value is 1 if filp owns hyper-z access,
 		 * 0 otherwise. */
-		if (DRM_COPY_FROM_USER(value, value_ptr, sizeof(uint32_t))) {
+		if (copy_from_user(value, value_ptr, sizeof(uint32_t))) {
 			DRM_ERROR("copy_from_user %s:%u\n", __func__, __LINE__);
 			return -EFAULT;
 		}
@@ -289,7 +293,7 @@ int radeon_info_ioctl(struct drm_device *dev, void *data, struct drm_file *filp)
 		break;
 	case RADEON_INFO_WANT_CMASK:
 		/* The same logic as Hyper-Z. */
-		if (DRM_COPY_FROM_USER(value, value_ptr, sizeof(uint32_t))) {
+		if (copy_from_user(value, value_ptr, sizeof(uint32_t))) {
 			DRM_ERROR("copy_from_user %s:%u\n", __func__, __LINE__);
 			return -EFAULT;
 		}
@@ -425,7 +429,7 @@ int radeon_info_ioctl(struct drm_device *dev, void *data, struct drm_file *filp)
 		*value = rdev->fastfb_working;
 		break;
 	case RADEON_INFO_RING_WORKING:
-		if (DRM_COPY_FROM_USER(value, value_ptr, sizeof(uint32_t))) {
+		if (copy_from_user(value, value_ptr, sizeof(uint32_t))) {
 			DRM_ERROR("copy_from_user %s:%u\n", __func__, __LINE__);
 			return -EFAULT;
 		}
@@ -440,6 +444,9 @@ int radeon_info_ioctl(struct drm_device *dev, void *data, struct drm_file *filp)
 			break;
 		case RADEON_CS_RING_UVD:
 			*value = rdev->ring[R600_RING_TYPE_UVD_INDEX].ready;
+			break;
+		case RADEON_CS_RING_VCE:
+			*value = rdev->ring[TN_RING_TYPE_VCE1_INDEX].ready;
 			break;
 		default:
 			return -EINVAL;
@@ -478,11 +485,39 @@ int radeon_info_ioctl(struct drm_device *dev, void *data, struct drm_file *filp)
 			DRM_DEBUG_KMS("BACKEND_ENABLED_MASK is si+ only!\n");
 		}
 		break;
+	case RADEON_INFO_MAX_SCLK:
+		if ((rdev->pm.pm_method == PM_METHOD_DPM) &&
+		    rdev->pm.dpm_enabled)
+			*value = rdev->pm.dpm.dyn_state.max_clock_voltage_on_ac.sclk * 10;
+		else
+			*value = rdev->pm.default_sclk * 10;
+		break;
+	case RADEON_INFO_VCE_FW_VERSION:
+		*value = rdev->vce.fw_version;
+		break;
+	case RADEON_INFO_VCE_FB_VERSION:
+		*value = rdev->vce.fb_version;
+		break;
+	case RADEON_INFO_NUM_BYTES_MOVED:
+		value = (uint32_t*)&value64;
+		value_size = sizeof(uint64_t);
+		value64 = atomic64_read(&rdev->num_bytes_moved);
+		break;
+	case RADEON_INFO_VRAM_USAGE:
+		value = (uint32_t*)&value64;
+		value_size = sizeof(uint64_t);
+		value64 = atomic64_read(&rdev->vram_usage);
+		break;
+	case RADEON_INFO_GTT_USAGE:
+		value = (uint32_t*)&value64;
+		value_size = sizeof(uint64_t);
+		value64 = atomic64_read(&rdev->gtt_usage);
+		break;
 	default:
 		DRM_DEBUG_KMS("Invalid request %d\n", info->request);
 		return -EINVAL;
 	}
-	if (DRM_COPY_TO_USER(value_ptr, (char*)value, value_size)) {
+	if (copy_to_user(value_ptr, (char*)value, value_size)) {
 		DRM_ERROR("copy_to_user %s:%u\n", __func__, __LINE__);
 		return -EFAULT;
 	}
@@ -536,27 +571,35 @@ int radeon_driver_open_kms(struct drm_device *dev, struct drm_file *file_priv)
 			return -ENOMEM;
 		}
 
-		radeon_vm_init(rdev, &fpriv->vm);
-
-		r = radeon_bo_reserve(rdev->ring_tmp_bo.bo, false);
-		if (r)
-			return r;
-
-		/* map the ib pool buffer read only into
-		 * virtual address space */
-		bo_va = radeon_vm_bo_add(rdev, &fpriv->vm,
-					 rdev->ring_tmp_bo.bo);
-		r = radeon_vm_bo_set_addr(rdev, bo_va, RADEON_VA_IB_OFFSET,
-					  RADEON_VM_PAGE_READABLE |
-					  RADEON_VM_PAGE_SNOOPED);
-
-		radeon_bo_unreserve(rdev->ring_tmp_bo.bo);
+		r = radeon_vm_init(rdev, &fpriv->vm);
 		if (r) {
-			radeon_vm_fini(rdev, &fpriv->vm);
 			kfree(fpriv);
 			return r;
 		}
 
+		if (rdev->accel_working) {
+			r = radeon_bo_reserve(rdev->ring_tmp_bo.bo, false);
+			if (r) {
+				radeon_vm_fini(rdev, &fpriv->vm);
+				kfree(fpriv);
+				return r;
+			}
+
+			/* map the ib pool buffer read only into
+			 * virtual address space */
+			bo_va = radeon_vm_bo_add(rdev, &fpriv->vm,
+						 rdev->ring_tmp_bo.bo);
+			r = radeon_vm_bo_set_addr(rdev, bo_va, RADEON_VA_IB_OFFSET,
+						  RADEON_VM_PAGE_READABLE |
+						  RADEON_VM_PAGE_SNOOPED);
+
+			radeon_bo_unreserve(rdev->ring_tmp_bo.bo);
+			if (r) {
+				radeon_vm_fini(rdev, &fpriv->vm);
+				kfree(fpriv);
+				return r;
+			}
+		}
 		file_priv->driver_priv = fpriv;
 	}
 
@@ -584,13 +627,15 @@ void radeon_driver_postclose_kms(struct drm_device *dev,
 		struct radeon_bo_va *bo_va;
 		int r;
 
-		r = radeon_bo_reserve(rdev->ring_tmp_bo.bo, false);
-		if (!r) {
-			bo_va = radeon_vm_bo_find(&fpriv->vm,
-						  rdev->ring_tmp_bo.bo);
-			if (bo_va)
-				radeon_vm_bo_rmv(rdev, bo_va);
-			radeon_bo_unreserve(rdev->ring_tmp_bo.bo);
+		if (rdev->accel_working) {
+			r = radeon_bo_reserve(rdev->ring_tmp_bo.bo, false);
+			if (!r) {
+				bo_va = radeon_vm_bo_find(&fpriv->vm,
+							  rdev->ring_tmp_bo.bo);
+				if (bo_va)
+					radeon_vm_bo_rmv(rdev, bo_va);
+				radeon_bo_unreserve(rdev->ring_tmp_bo.bo);
+			}
 		}
 
 		radeon_vm_fini(rdev, &fpriv->vm);
@@ -617,6 +662,7 @@ void radeon_driver_preclose_kms(struct drm_device *dev,
 	if (rdev->cmask_filp == file_priv)
 		rdev->cmask_filp = NULL;
 	radeon_uvd_free_handles(rdev, file_priv);
+	radeon_vce_free_handles(rdev, file_priv);
 }
 
 /*
@@ -726,11 +772,12 @@ int radeon_get_vblank_timestamp_kms(struct drm_device *dev, int crtc,
 	/* Helper routine in DRM core does all the work: */
 	return drm_calc_vbltimestamp_from_scanoutpos(dev, crtc, max_error,
 						     vblank_time, flags,
-						     drmcrtc);
+						     drmcrtc, &drmcrtc->hwmode);
 }
 
 #define KMS_INVALID_IOCTL(name)						\
-int name(struct drm_device *dev, void *data, struct drm_file *file_priv)\
+static int name(struct drm_device *dev, void *data, struct drm_file	\
+		*file_priv)						\
 {									\
 	DRM_ERROR("invalid ioctl with kms %s\n", __func__);		\
 	return -EINVAL;							\
@@ -810,5 +857,6 @@ const struct drm_ioctl_desc radeon_ioctls_kms[] = {
 	DRM_IOCTL_DEF_DRV(RADEON_GEM_GET_TILING, radeon_gem_get_tiling_ioctl, DRM_AUTH|DRM_UNLOCKED|DRM_RENDER_ALLOW),
 	DRM_IOCTL_DEF_DRV(RADEON_GEM_BUSY, radeon_gem_busy_ioctl, DRM_AUTH|DRM_UNLOCKED|DRM_RENDER_ALLOW),
 	DRM_IOCTL_DEF_DRV(RADEON_GEM_VA, radeon_gem_va_ioctl, DRM_AUTH|DRM_UNLOCKED|DRM_RENDER_ALLOW),
+	DRM_IOCTL_DEF_DRV(RADEON_GEM_OP, radeon_gem_op_ioctl, DRM_AUTH|DRM_UNLOCKED|DRM_RENDER_ALLOW),
 };
 int radeon_max_kms_ioctl = DRM_ARRAY_SIZE(radeon_ioctls_kms);

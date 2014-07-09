@@ -5,7 +5,7 @@
  *
  * GPL LICENSE SUMMARY
  *
- * Copyright(c) 2013 Intel Corporation. All rights reserved.
+ * Copyright(c) 2013 - 2014 Intel Corporation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -30,7 +30,7 @@
  *
  * BSD LICENSE
  *
- * Copyright(c) 2012 - 2013 Intel Corporation. All rights reserved.
+ * Copyright(c) 2012 - 2014 Intel Corporation. All rights reserved.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -340,7 +340,7 @@ static void check_exit_ctkill(struct work_struct *work)
 
 	iwl_trans_start_hw(mvm->trans);
 	temp = check_nic_temperature(mvm);
-	iwl_trans_stop_hw(mvm->trans, false);
+	iwl_trans_stop_device(mvm->trans);
 
 	if (temp < MIN_TEMPERATURE || temp > MAX_TEMPERATURE) {
 		IWL_DEBUG_TEMP(mvm, "Failed to measure NIC temperature\n");
@@ -388,7 +388,7 @@ static void iwl_mvm_tt_tx_protection(struct iwl_mvm *mvm, bool enable)
 						lockdep_is_held(&mvm->mutex));
 		if (IS_ERR_OR_NULL(sta))
 			continue;
-		mvmsta = (void *)sta->drv_priv;
+		mvmsta = iwl_mvm_sta_from_mac80211(sta);
 		if (enable == mvmsta->tt_tx_protection)
 			continue;
 		err = iwl_mvm_tx_protection(mvm, mvmsta, enable);
@@ -403,7 +403,7 @@ static void iwl_mvm_tt_tx_protection(struct iwl_mvm *mvm, bool enable)
 	}
 }
 
-static void iwl_mvm_tt_tx_backoff(struct iwl_mvm *mvm, u32 backoff)
+void iwl_mvm_tt_tx_backoff(struct iwl_mvm *mvm, u32 backoff)
 {
 	struct iwl_host_cmd cmd = {
 		.id = REPLY_THERMAL_MNG_BACKOFF,
@@ -411,6 +411,8 @@ static void iwl_mvm_tt_tx_backoff(struct iwl_mvm *mvm, u32 backoff)
 		.data = { &backoff, },
 		.flags = CMD_SYNC,
 	};
+
+	backoff = max(backoff, mvm->thermal_throttle.min_backoff);
 
 	if (iwl_mvm_send_cmd(mvm, &cmd) == 0) {
 		IWL_DEBUG_TEMP(mvm, "Set Thermal Tx backoff to: %u\n",
@@ -534,7 +536,7 @@ static const struct iwl_tt_params iwl7000_high_temp_tt_params = {
 	.support_tx_backoff = true,
 };
 
-void iwl_mvm_tt_initialize(struct iwl_mvm *mvm)
+void iwl_mvm_tt_initialize(struct iwl_mvm *mvm, u32 min_backoff)
 {
 	struct iwl_mvm_tt_mgmt *tt = &mvm->thermal_throttle;
 
@@ -546,6 +548,7 @@ void iwl_mvm_tt_initialize(struct iwl_mvm *mvm)
 		tt->params = &iwl7000_tt_params;
 
 	tt->throttle = false;
+	tt->min_backoff = min_backoff;
 	INIT_DELAYED_WORK(&tt->ct_kill_exit, check_exit_ctkill);
 }
 

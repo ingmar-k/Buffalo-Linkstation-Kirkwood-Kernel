@@ -33,6 +33,8 @@
 #include <linux/uprobes.h>
 #include <linux/compat.h>
 #include <linux/cn_proc.h>
+#include <linux/compiler.h>
+
 #define CREATE_TRACE_POINTS
 #include <trace/events/signal.h>
 
@@ -2047,8 +2049,8 @@ static bool do_signal_stop(int signr)
 		if (task_set_jobctl_pending(current, signr | gstop))
 			sig->group_stop_count++;
 
-		for (t = next_thread(current); t != current;
-		     t = next_thread(t)) {
+		t = current;
+		while_each_thread(current, t) {
 			/*
 			 * Setting state to TASK_STOPPED for a group
 			 * stop is always done with the siglock held,
@@ -2382,7 +2384,7 @@ relock:
  * @regs:		user register state
  * @stepping:		nonzero if debugger single-step or block-step in use
  *
- * This function should be called when a signal has succesfully been
+ * This function should be called when a signal has successfully been
  * delivered. It updates the blocked signals accordingly (@ka->sa.sa_mask
  * is always blocked, and the signal itself is blocked unless %SA_NODEFER
  * is set in @ka->sa.sa_flags.  Tracing is notified.
@@ -3125,8 +3127,7 @@ int do_sigaction(int sig, struct k_sigaction *act, struct k_sigaction *oact)
 			rm_from_queue_full(&mask, &t->signal->shared_pending);
 			do {
 				rm_from_queue_full(&mask, &t->pending);
-				t = next_thread(t);
-			} while (t != current);
+			} while_each_thread(current, t);
 		}
 	}
 
@@ -3619,7 +3620,7 @@ SYSCALL_DEFINE3(sigsuspend, int, unused1, int, unused2, old_sigset_t, mask)
 }
 #endif
 
-__attribute__((weak)) const char *arch_vma_name(struct vm_area_struct *vma)
+__weak const char *arch_vma_name(struct vm_area_struct *vma)
 {
 	return NULL;
 }

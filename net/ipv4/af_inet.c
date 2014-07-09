@@ -126,9 +126,6 @@
 static struct list_head inetsw[SOCK_MAX];
 static DEFINE_SPINLOCK(inetsw_lock);
 
-struct ipv4_config ipv4_config;
-EXPORT_SYMBOL(ipv4_config);
-
 /* New destruction routine */
 
 void inet_sock_destruct(struct sock *sk)
@@ -342,7 +339,7 @@ lookup_protocol:
 			inet->hdrincl = 1;
 	}
 
-	if (ipv4_config.no_pmtu_disc)
+	if (net->ipv4.sysctl_ip_no_pmtu_disc)
 		inet->pmtudisc = IP_PMTUDISC_DONT;
 	else
 		inet->pmtudisc = IP_PMTUDISC_WANT;
@@ -1133,7 +1130,7 @@ static int inet_sk_reselect_saddr(struct sock *sk)
 	fl4 = &inet->cork.fl.u.ip4;
 	rt = ip_route_connect(fl4, daddr, 0, RT_CONN_FLAGS(sk),
 			      sk->sk_bound_dev_if, sk->sk_protocol,
-			      inet->inet_sport, inet->inet_dport, sk, false);
+			      inet->inet_sport, inet->inet_dport, sk);
 	if (IS_ERR(rt))
 		return PTR_ERR(rt);
 
@@ -1380,8 +1377,12 @@ static struct sk_buff **inet_gro_receive(struct sk_buff **head,
 		if (!NAPI_GRO_CB(p)->same_flow)
 			continue;
 
-		iph2 = ip_hdr(p);
-
+		iph2 = (struct iphdr *)(p->data + off);
+		/* The above works because, with the exception of the top
+		 * (inner most) layer, we only aggregate pkts with the same
+		 * hdr length so all the hdrs we'll need to verify will start
+		 * at the same offset.
+		 */
 		if ((iph->protocol ^ iph2->protocol) |
 		    ((__force u32)iph->saddr ^ (__force u32)iph2->saddr) |
 		    ((__force u32)iph->daddr ^ (__force u32)iph2->daddr)) {
@@ -1393,13 +1394,24 @@ static struct sk_buff **inet_gro_receive(struct sk_buff **head,
 		NAPI_GRO_CB(p)->flush |=
 			(iph->ttl ^ iph2->ttl) |
 			(iph->tos ^ iph2->tos) |
-			(__force int)((iph->frag_off ^ iph2->frag_off) & htons(IP_DF)) |
-			((u16)(ntohs(iph2->id) + NAPI_GRO_CB(p)->count) ^ id);
+			((iph->frag_off ^ iph2->frag_off) & htons(IP_DF));
 
+		/* Save the IP ID check to be included later when we get to
+		 * the transport layer so only the inner most IP ID is checked.
+		 * This is because some GSO/TSO implementations do not
+		 * correctly increment the IP ID for the outer hdrs.
+		 */
+		NAPI_GRO_CB(p)->flush_id =
+			    ((u16)(ntohs(iph2->id) + NAPI_GRO_CB(p)->count) ^ id);
 		NAPI_GRO_CB(p)->flush |= flush;
 	}
 
 	NAPI_GRO_CB(skb)->flush |= flush;
+	skb_set_network_header(skb, off);
+	/* The above will be needed by the transport layer if there is one
+	 * immediately following this IP hdr.
+	 */
+
 	skb_gro_pull(skb, sizeof(*iph));
 	skb_set_transport_header(skb, skb_gro_offset(skb));
 
@@ -1414,10 +1426,10 @@ out:
 	return pp;
 }
 
-static int inet_gro_complete(struct sk_buff *skb)
+static int inet_gro_complete(struct sk_buff *skb, int nhoff)
 {
-	__be16 newlen = htons(skb->len - skb_network_offset(skb));
-	struct iphdr *iph = ip_hdr(skb);
+	__be16 newlen = htons(skb->len - nhoff);
+	struct iphdr *iph = (struct iphdr *)(skb->data + nhoff);
 	const struct net_offload *ops;
 	int proto = iph->protocol;
 	int err = -ENOSYS;
@@ -1430,7 +1442,11 @@ static int inet_gro_complete(struct sk_buff *skb)
 	if (WARN_ON(!ops || !ops->callbacks.gro_complete))
 		goto out_unlock;
 
-	err = ops->callbacks.gro_complete(skb);
+	/* Only need to add sizeof(*iph) to get to the next hdr below
+	 * because any hdr with option will have been flushed in
+	 * inet_gro_receive().
+	 */
+	err = ops->callbacks.gro_complete(skb, nhoff + sizeof(*iph));
 
 out_unlock:
 	rcu_read_unlock();
@@ -1489,9 +1505,9 @@ u64 snmp_fold_field64(void __percpu *mib[], int offt, size_t syncp_offset)
 		bhptr = per_cpu_ptr(mib[0], cpu);
 		syncp = (struct u64_stats_sync *)(bhptr + syncp_offset);
 		do {
-			start = u64_stats_fetch_begin_bh(syncp);
+			start = u64_stats_fetch_begin_irq(syncp);
 			v = *(((u64 *) bhptr) + offt);
-		} while (u64_stats_fetch_retry_bh(syncp, start));
+		} while (u64_stats_fetch_retry_irq(syncp, start));
 
 		res += v;
 	}
@@ -1532,6 +1548,7 @@ static const struct net_protocol tcp_protocol = {
 	.err_handler	=	tcp_v4_err,
 	.no_policy	=	1,
 	.netns_ok	=	1,
+	.icmp_strict_tag_validation = 1,
 };
 
 static const struct net_protocol udp_protocol = {
@@ -1631,6 +1648,39 @@ static __net_initdata struct pernet_operations ipv4_mib_ops = {
 static int __init init_ipv4_mibs(void)
 {
 	return register_pernet_subsys(&ipv4_mib_ops);
+}
+
+static __net_init int inet_init_net(struct net *net)
+{
+	/*
+	 * Set defaults for local port range
+	 */
+	seqlock_init(&net->ipv4.ip_local_ports.lock);
+	net->ipv4.ip_local_ports.range[0] =  32768;
+	net->ipv4.ip_local_ports.range[1] =  61000;
+
+	seqlock_init(&net->ipv4.ping_group_range.lock);
+	/*
+	 * Sane defaults - nobody may create ping sockets.
+	 * Boot scripts should set this to distro-specific group.
+	 */
+	net->ipv4.ping_group_range.range[0] = make_kgid(&init_user_ns, 1);
+	net->ipv4.ping_group_range.range[1] = make_kgid(&init_user_ns, 0);
+	return 0;
+}
+
+static __net_exit void inet_exit_net(struct net *net)
+{
+}
+
+static __net_initdata struct pernet_operations af_inet_ops = {
+	.init = inet_init_net,
+	.exit = inet_exit_net,
+};
+
+static int __init init_inet_pernet_ops(void)
+{
+	return register_pernet_subsys(&af_inet_ops);
 }
 
 static int ipv4_proc_init(void);
@@ -1777,6 +1827,9 @@ static int __init inet_init(void)
 	if (ip_mr_init())
 		pr_crit("%s: Cannot init ipv4 mroute\n", __func__);
 #endif
+
+	if (init_inet_pernet_ops())
+		pr_crit("%s: Cannot init ipv4 inet pernet ops\n", __func__);
 	/*
 	 *	Initialise per-cpu ipv4 mibs
 	 */

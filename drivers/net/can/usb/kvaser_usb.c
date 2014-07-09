@@ -12,7 +12,6 @@
  * Copyright (C) 2012 Olivier Sobrie <olivier@sobrie.be>
  */
 
-#include <linux/init.h>
 #include <linux/completion.h>
 #include <linux/module.h>
 #include <linux/netdevice.h>
@@ -1389,6 +1388,7 @@ static const struct net_device_ops kvaser_usb_netdev_ops = {
 	.ndo_open = kvaser_usb_open,
 	.ndo_stop = kvaser_usb_close,
 	.ndo_start_xmit = kvaser_usb_start_xmit,
+	.ndo_change_mtu = can_change_mtu,
 };
 
 static const struct can_bittiming_const kvaser_usb_bittiming_const = {
@@ -1530,6 +1530,7 @@ static int kvaser_usb_init_one(struct usb_interface *intf,
 	netdev->netdev_ops = &kvaser_usb_netdev_ops;
 
 	SET_NETDEV_DEV(netdev, &intf->dev);
+	netdev->dev_id = channel;
 
 	dev->nets[channel] = priv;
 

@@ -413,6 +413,11 @@ struct s5p_mfc_vp8_enc_params {
 	enum v4l2_vp8_golden_frame_sel golden_frame_sel;
 	u8 hier_layer;
 	u8 hier_layer_qp[3];
+	u8 rc_min_qp;
+	u8 rc_max_qp;
+	u8 rc_frame_qp;
+	u8 rc_p_frame_qp;
+	u8 profile;
 };
 
 /**
@@ -421,6 +426,8 @@ struct s5p_mfc_vp8_enc_params {
 struct s5p_mfc_enc_params {
 	u16 width;
 	u16 height;
+	u32 mv_h_range;
+	u32 mv_v_range;
 
 	u16 gop_size;
 	enum v4l2_mpeg_video_multi_slice_mode slice_mode;

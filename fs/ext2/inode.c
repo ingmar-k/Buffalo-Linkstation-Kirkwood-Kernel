@@ -78,7 +78,7 @@ void ext2_evict_inode(struct inode * inode)
 		dquot_drop(inode);
 	}
 
-	truncate_inode_pages(&inode->i_data, 0);
+	truncate_inode_pages_final(&inode->i_data);
 
 	if (want_delete) {
 		sb_start_intwrite(inode->i_sb);
@@ -1566,7 +1566,7 @@ int ext2_setattr(struct dentry *dentry, struct iattr *iattr)
 	}
 	setattr_copy(inode, iattr);
 	if (iattr->ia_valid & ATTR_MODE)
-		error = ext2_acl_chmod(inode);
+		error = posix_acl_chmod(inode, inode->i_mode);
 	mark_inode_dirty(inode);
 
 	return error;

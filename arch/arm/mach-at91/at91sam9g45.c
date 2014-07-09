@@ -12,14 +12,15 @@
 
 #include <linux/module.h>
 #include <linux/dma-mapping.h>
+#include <linux/clk/at91_pmc.h>
 
 #include <asm/irq.h>
 #include <asm/mach/arch.h>
 #include <asm/mach/map.h>
 #include <asm/system_misc.h>
 #include <mach/at91sam9g45.h>
-#include <mach/at91_pmc.h>
 #include <mach/cpu.h>
+#include <mach/hardware.h>
 
 #include "at91_aic.h"
 #include "soc.h"
@@ -284,6 +285,7 @@ static struct clk_lookup periph_clocks_lookups[] = {
 	CLKDEV_CON_ID("pioE", &pioDE_clk),
 	/* Fake adc clock */
 	CLKDEV_CON_ID("adc_clk", &tsc_clk),
+	CLKDEV_CON_DEV_ID(NULL, "fffb8000.pwm", &pwm_clk),
 };
 
 static struct clk_lookup usart_clocks_lookups[] = {

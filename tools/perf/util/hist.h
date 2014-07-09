@@ -14,6 +14,15 @@ struct hist_entry;
 struct addr_location;
 struct symbol;
 
+enum hist_filter {
+	HIST_FILTER__DSO,
+	HIST_FILTER__THREAD,
+	HIST_FILTER__PARENT,
+	HIST_FILTER__SYMBOL,
+	HIST_FILTER__GUEST,
+	HIST_FILTER__HOST,
+};
+
 /*
  * The kernel collects the number of events it couldn't send in a stretch and
  * when possible sends this number in a PERF_RECORD_LOST event. The number of
@@ -111,9 +120,6 @@ size_t events_stats__fprintf(struct events_stats *stats, FILE *fp);
 size_t hists__fprintf(struct hists *hists, bool show_header, int max_rows,
 		      int max_cols, float min_pcnt, FILE *fp);
 
-int hist_entry__inc_addr_samples(struct hist_entry *he, int evidx, u64 addr);
-int hist_entry__annotate(struct hist_entry *he, size_t privsize);
-
 void hists__filter_by_dso(struct hists *hists);
 void hists__filter_by_thread(struct hists *hists);
 void hists__filter_by_symbol(struct hists *hists);
@@ -135,8 +141,10 @@ struct perf_hpp {
 };
 
 struct perf_hpp_fmt {
-	int (*header)(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp);
-	int (*width)(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp);
+	int (*header)(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+		      struct perf_evsel *evsel);
+	int (*width)(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
+		     struct perf_evsel *evsel);
 	int (*color)(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 		     struct hist_entry *he);
 	int (*entry)(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
@@ -168,6 +176,20 @@ enum {
 void perf_hpp__init(void);
 void perf_hpp__column_register(struct perf_hpp_fmt *format);
 void perf_hpp__column_enable(unsigned col);
+
+typedef u64 (*hpp_field_fn)(struct hist_entry *he);
+typedef int (*hpp_callback_fn)(struct perf_hpp *hpp, bool front);
+typedef int (*hpp_snprint_fn)(struct perf_hpp *hpp, const char *fmt, ...);
+
+int __hpp__fmt(struct perf_hpp *hpp, struct hist_entry *he,
+	       hpp_field_fn get_field, hpp_callback_fn callback,
+	       const char *fmt, hpp_snprint_fn print_fn, bool fmt_percent);
+
+static inline void advance_hpp(struct perf_hpp *hpp, int inc)
+{
+	hpp->buf  += inc;
+	hpp->size -= inc;
+}
 
 static inline size_t perf_hpp__use_color(void)
 {

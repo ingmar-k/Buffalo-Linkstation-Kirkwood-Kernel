@@ -10,20 +10,6 @@
  */
 #include "rsnd.h"
 
-struct rsnd_gen_ops {
-	int (*probe)(struct platform_device *pdev,
-		     struct rcar_snd_info *info,
-		     struct rsnd_priv *priv);
-	void (*remove)(struct platform_device *pdev,
-		      struct rsnd_priv *priv);
-	int (*path_init)(struct rsnd_priv *priv,
-			 struct rsnd_dai *rdai,
-			 struct rsnd_dai_stream *io);
-	int (*path_exit)(struct rsnd_priv *priv,
-			 struct rsnd_dai *rdai,
-			 struct rsnd_dai_stream *io);
-};
-
 struct rsnd_gen {
 	void __iomem *base[RSND_BASE_MAX];
 
@@ -86,11 +72,27 @@ static struct regmap_bus rsnd_regmap_bus = {
 	.val_format_endian_default	= REGMAP_ENDIAN_NATIVE,
 };
 
+static int rsnd_is_accessible_reg(struct rsnd_priv *priv,
+				  struct rsnd_gen *gen, enum rsnd_reg reg)
+{
+	if (!gen->regs[reg]) {
+		struct device *dev = rsnd_priv_to_dev(priv);
+
+		dev_err(dev, "unsupported register access %x\n", reg);
+		return 0;
+	}
+
+	return 1;
+}
+
 u32 rsnd_read(struct rsnd_priv *priv,
 	      struct rsnd_mod *mod, enum rsnd_reg reg)
 {
 	struct rsnd_gen *gen = rsnd_priv_to_gen(priv);
 	u32 val;
+
+	if (!rsnd_is_accessible_reg(priv, gen, reg))
+		return 0;
 
 	regmap_fields_read(gen->regs[reg], rsnd_mod_id(mod), &val);
 
@@ -103,6 +105,9 @@ void rsnd_write(struct rsnd_priv *priv,
 {
 	struct rsnd_gen *gen = rsnd_priv_to_gen(priv);
 
+	if (!rsnd_is_accessible_reg(priv, gen, reg))
+		return;
+
 	regmap_fields_write(gen->regs[reg], rsnd_mod_id(mod), data);
 }
 
@@ -111,73 +116,157 @@ void rsnd_bset(struct rsnd_priv *priv, struct rsnd_mod *mod,
 {
 	struct rsnd_gen *gen = rsnd_priv_to_gen(priv);
 
+	if (!rsnd_is_accessible_reg(priv, gen, reg))
+		return;
+
 	regmap_fields_update_bits(gen->regs[reg], rsnd_mod_id(mod),
 				  mask, data);
 }
 
+static int rsnd_gen_regmap_init(struct rsnd_priv *priv,
+				struct rsnd_gen  *gen,
+				struct reg_field *regf)
+{
+	int i;
+	struct device *dev = rsnd_priv_to_dev(priv);
+	struct regmap_config regc;
+
+	memset(&regc, 0, sizeof(regc));
+	regc.reg_bits = 32;
+	regc.val_bits = 32;
+
+	gen->regmap = devm_regmap_init(dev, &rsnd_regmap_bus, priv, &regc);
+	if (IS_ERR(gen->regmap)) {
+		dev_err(dev, "regmap error %ld\n", PTR_ERR(gen->regmap));
+		return PTR_ERR(gen->regmap);
+	}
+
+	for (i = 0; i < RSND_REG_MAX; i++) {
+		gen->regs[i] = NULL;
+		if (!regf[i].reg)
+			continue;
+
+		gen->regs[i] = devm_regmap_field_alloc(dev, gen->regmap, regf[i]);
+		if (IS_ERR(gen->regs[i]))
+			return PTR_ERR(gen->regs[i]);
+
+	}
+
+	return 0;
+}
+
 /*
  *		Gen2
- *		will be filled in the future
  */
+
+/* single address mapping */
+#define RSND_GEN2_S_REG(gen, reg, id, offset)				\
+	RSND_REG_SET(gen, RSND_REG_##id, RSND_GEN2_##reg, offset, 0, 10)
+
+/* multi address mapping */
+#define RSND_GEN2_M_REG(gen, reg, id, offset, _id_offset)		\
+	RSND_REG_SET(gen, RSND_REG_##id, RSND_GEN2_##reg, offset, _id_offset, 10)
+
+static int rsnd_gen2_regmap_init(struct rsnd_priv *priv, struct rsnd_gen *gen)
+{
+	struct reg_field regf[RSND_REG_MAX] = {
+		RSND_GEN2_S_REG(gen, SSIU,	SSI_MODE0,	0x800),
+		RSND_GEN2_S_REG(gen, SSIU,	SSI_MODE1,	0x804),
+		/* FIXME: it needs SSI_MODE2/3 in the future */
+		RSND_GEN2_M_REG(gen, SSIU,	SSI_BUSIF_MODE,	0x0,	0x80),
+		RSND_GEN2_M_REG(gen, SSIU,	SSI_BUSIF_ADINR,0x4,	0x80),
+		RSND_GEN2_M_REG(gen, SSIU,	SSI_CTRL,	0x10,	0x80),
+		RSND_GEN2_M_REG(gen, SSIU,	INT_ENABLE,	0x18,	0x80),
+
+		RSND_GEN2_M_REG(gen, SCU,	SRC_BUSIF_MODE,	0x0,	0x20),
+		RSND_GEN2_M_REG(gen, SCU,	SRC_ROUTE_MODE0,0xc,	0x20),
+		RSND_GEN2_M_REG(gen, SCU,	SRC_CTRL,	0x10,	0x20),
+		RSND_GEN2_M_REG(gen, SCU,	SRC_SWRSR,	0x200,	0x40),
+		RSND_GEN2_M_REG(gen, SCU,	SRC_SRCIR,	0x204,	0x40),
+		RSND_GEN2_M_REG(gen, SCU,	SRC_ADINR,	0x214,	0x40),
+		RSND_GEN2_M_REG(gen, SCU,	SRC_IFSCR,	0x21c,	0x40),
+		RSND_GEN2_M_REG(gen, SCU,	SRC_IFSVR,	0x220,	0x40),
+		RSND_GEN2_M_REG(gen, SCU,	SRC_SRCCR,	0x224,	0x40),
+		RSND_GEN2_M_REG(gen, SCU,	SRC_BSDSR,	0x22c,	0x40),
+		RSND_GEN2_M_REG(gen, SCU,	SRC_BSISR,	0x238,	0x40),
+
+		RSND_GEN2_S_REG(gen, ADG,	BRRA,		0x00),
+		RSND_GEN2_S_REG(gen, ADG,	BRRB,		0x04),
+		RSND_GEN2_S_REG(gen, ADG,	SSICKR,		0x08),
+		RSND_GEN2_S_REG(gen, ADG,	AUDIO_CLK_SEL0,	0x0c),
+		RSND_GEN2_S_REG(gen, ADG,	AUDIO_CLK_SEL1,	0x10),
+		RSND_GEN2_S_REG(gen, ADG,	AUDIO_CLK_SEL2,	0x14),
+		RSND_GEN2_S_REG(gen, ADG,	DIV_EN,		0x30),
+		RSND_GEN2_S_REG(gen, ADG,	SRCIN_TIMSEL0,	0x34),
+		RSND_GEN2_S_REG(gen, ADG,	SRCIN_TIMSEL1,	0x38),
+		RSND_GEN2_S_REG(gen, ADG,	SRCIN_TIMSEL2,	0x3c),
+		RSND_GEN2_S_REG(gen, ADG,	SRCIN_TIMSEL3,	0x40),
+		RSND_GEN2_S_REG(gen, ADG,	SRCIN_TIMSEL4,	0x44),
+		RSND_GEN2_S_REG(gen, ADG,	SRCOUT_TIMSEL0,	0x48),
+		RSND_GEN2_S_REG(gen, ADG,	SRCOUT_TIMSEL1,	0x4c),
+		RSND_GEN2_S_REG(gen, ADG,	SRCOUT_TIMSEL2,	0x50),
+		RSND_GEN2_S_REG(gen, ADG,	SRCOUT_TIMSEL3,	0x54),
+		RSND_GEN2_S_REG(gen, ADG,	SRCOUT_TIMSEL4,	0x58),
+
+		RSND_GEN2_M_REG(gen, SSI,	SSICR,		0x00,	0x40),
+		RSND_GEN2_M_REG(gen, SSI,	SSISR,		0x04,	0x40),
+		RSND_GEN2_M_REG(gen, SSI,	SSITDR,		0x08,	0x40),
+		RSND_GEN2_M_REG(gen, SSI,	SSIRDR,		0x0c,	0x40),
+		RSND_GEN2_M_REG(gen, SSI,	SSIWSR,		0x20,	0x40),
+	};
+
+	return rsnd_gen_regmap_init(priv, gen, regf);
+}
+
+static int rsnd_gen2_probe(struct platform_device *pdev,
+			   struct rsnd_priv *priv)
+{
+	struct device *dev = rsnd_priv_to_dev(priv);
+	struct rsnd_gen *gen = rsnd_priv_to_gen(priv);
+	struct resource *scu_res;
+	struct resource *adg_res;
+	struct resource *ssiu_res;
+	struct resource *ssi_res;
+	int ret;
+
+	/*
+	 * map address
+	 */
+	scu_res  = platform_get_resource(pdev, IORESOURCE_MEM, RSND_GEN2_SCU);
+	adg_res  = platform_get_resource(pdev, IORESOURCE_MEM, RSND_GEN2_ADG);
+	ssiu_res = platform_get_resource(pdev, IORESOURCE_MEM, RSND_GEN2_SSIU);
+	ssi_res  = platform_get_resource(pdev, IORESOURCE_MEM, RSND_GEN2_SSI);
+
+	gen->base[RSND_GEN2_SCU]  = devm_ioremap_resource(dev, scu_res);
+	gen->base[RSND_GEN2_ADG]  = devm_ioremap_resource(dev, adg_res);
+	gen->base[RSND_GEN2_SSIU] = devm_ioremap_resource(dev, ssiu_res);
+	gen->base[RSND_GEN2_SSI]  = devm_ioremap_resource(dev, ssi_res);
+	if (IS_ERR(gen->base[RSND_GEN2_SCU])  ||
+	    IS_ERR(gen->base[RSND_GEN2_ADG])  ||
+	    IS_ERR(gen->base[RSND_GEN2_SSIU]) ||
+	    IS_ERR(gen->base[RSND_GEN2_SSI]))
+		return -ENODEV;
+
+	ret = rsnd_gen2_regmap_init(priv, gen);
+	if (ret < 0)
+		return ret;
+
+	dev_dbg(dev, "Gen2 device probed\n");
+	dev_dbg(dev, "SCU  : %08x => %p\n", scu_res->start,
+		gen->base[RSND_GEN2_SCU]);
+	dev_dbg(dev, "ADG  : %08x => %p\n", adg_res->start,
+		gen->base[RSND_GEN2_ADG]);
+	dev_dbg(dev, "SSIU : %08x => %p\n", ssiu_res->start,
+		gen->base[RSND_GEN2_SSIU]);
+	dev_dbg(dev, "SSI  : %08x => %p\n", ssi_res->start,
+		gen->base[RSND_GEN2_SSI]);
+
+	return 0;
+}
 
 /*
  *		Gen1
  */
-static int rsnd_gen1_path_init(struct rsnd_priv *priv,
-			       struct rsnd_dai *rdai,
-			       struct rsnd_dai_stream *io)
-{
-	struct rsnd_mod *mod;
-	int ret;
-	int id;
-
-	/*
-	 * Gen1 is created by SRU/SSI, and this SRU is base module of
-	 * Gen2's SCU/SSIU/SSI. (Gen2 SCU/SSIU came from SRU)
-	 *
-	 * Easy image is..
-	 *	Gen1 SRU = Gen2 SCU + SSIU + etc
-	 *
-	 * Gen2 SCU path is very flexible, but, Gen1 SRU (SCU parts) is
-	 * using fixed path.
-	 *
-	 * Then, SSI id = SCU id here
-	 */
-
-	/* get SSI's ID */
-	mod = rsnd_ssi_mod_get_frm_dai(priv,
-				       rsnd_dai_id(priv, rdai),
-				       rsnd_dai_is_play(rdai, io));
-	id = rsnd_mod_id(mod);
-
-	/* SSI */
-	mod = rsnd_ssi_mod_get(priv, id);
-	ret = rsnd_dai_connect(rdai, mod, io);
-	if (ret < 0)
-		return ret;
-
-	/* SCU */
-	mod = rsnd_scu_mod_get(priv, id);
-	ret = rsnd_dai_connect(rdai, mod, io);
-
-	return ret;
-}
-
-static int rsnd_gen1_path_exit(struct rsnd_priv *priv,
-			       struct rsnd_dai *rdai,
-			       struct rsnd_dai_stream *io)
-{
-	struct rsnd_mod *mod, *n;
-	int ret = 0;
-
-	/*
-	 * remove all mod from rdai
-	 */
-	for_each_rsnd_mod(mod, n, io)
-		ret |= rsnd_dai_disconnect(mod);
-
-	return ret;
-}
 
 /* single address mapping */
 #define RSND_GEN1_S_REG(gen, reg, id, offset)	\
@@ -189,19 +278,23 @@ static int rsnd_gen1_path_exit(struct rsnd_priv *priv,
 
 static int rsnd_gen1_regmap_init(struct rsnd_priv *priv, struct rsnd_gen *gen)
 {
-	int i;
-	struct device *dev = rsnd_priv_to_dev(priv);
-	struct regmap_config regc;
 	struct reg_field regf[RSND_REG_MAX] = {
 		RSND_GEN1_S_REG(gen, SRU,	SRC_ROUTE_SEL,	0x00),
 		RSND_GEN1_S_REG(gen, SRU,	SRC_TMG_SEL0,	0x08),
 		RSND_GEN1_S_REG(gen, SRU,	SRC_TMG_SEL1,	0x0c),
 		RSND_GEN1_S_REG(gen, SRU,	SRC_TMG_SEL2,	0x10),
-		RSND_GEN1_S_REG(gen, SRU,	SRC_CTRL,	0xc0),
+		RSND_GEN1_S_REG(gen, SRU,	SRC_ROUTE_CTRL,	0xc0),
 		RSND_GEN1_S_REG(gen, SRU,	SSI_MODE0,	0xD0),
 		RSND_GEN1_S_REG(gen, SRU,	SSI_MODE1,	0xD4),
-		RSND_GEN1_M_REG(gen, SRU,	BUSIF_MODE,	0x20,	0x4),
-		RSND_GEN1_M_REG(gen, SRU,	BUSIF_ADINR,	0x214,	0x40),
+		RSND_GEN1_M_REG(gen, SRU,	SRC_BUSIF_MODE,	0x20,	0x4),
+		RSND_GEN1_M_REG(gen, SRU,	SRC_ROUTE_MODE0,0x50,	0x8),
+		RSND_GEN1_M_REG(gen, SRU,	SRC_SWRSR,	0x200,	0x40),
+		RSND_GEN1_M_REG(gen, SRU,	SRC_SRCIR,	0x204,	0x40),
+		RSND_GEN1_M_REG(gen, SRU,	SRC_ADINR,	0x214,	0x40),
+		RSND_GEN1_M_REG(gen, SRU,	SRC_IFSCR,	0x21c,	0x40),
+		RSND_GEN1_M_REG(gen, SRU,	SRC_IFSVR,	0x220,	0x40),
+		RSND_GEN1_M_REG(gen, SRU,	SRC_SRCCR,	0x224,	0x40),
+		RSND_GEN1_M_REG(gen, SRU,	SRC_MNFSR,	0x228,	0x40),
 
 		RSND_GEN1_S_REG(gen, ADG,	BRRA,		0x00),
 		RSND_GEN1_S_REG(gen, ADG,	BRRB,		0x04),
@@ -219,28 +312,10 @@ static int rsnd_gen1_regmap_init(struct rsnd_priv *priv, struct rsnd_gen *gen)
 		RSND_GEN1_M_REG(gen, SSI,	SSIWSR,		0x20,	0x40),
 	};
 
-	memset(&regc, 0, sizeof(regc));
-	regc.reg_bits = 32;
-	regc.val_bits = 32;
-
-	gen->regmap = devm_regmap_init(dev, &rsnd_regmap_bus, priv, &regc);
-	if (IS_ERR(gen->regmap)) {
-		dev_err(dev, "regmap error %ld\n", PTR_ERR(gen->regmap));
-		return PTR_ERR(gen->regmap);
-	}
-
-	for (i = 0; i < RSND_REG_MAX; i++) {
-		gen->regs[i] = devm_regmap_field_alloc(dev, gen->regmap, regf[i]);
-		if (IS_ERR(gen->regs[i]))
-			return PTR_ERR(gen->regs[i]);
-
-	}
-
-	return 0;
+	return rsnd_gen_regmap_init(priv, gen, regf);
 }
 
 static int rsnd_gen1_probe(struct platform_device *pdev,
-			   struct rcar_snd_info *info,
 			   struct rsnd_priv *priv)
 {
 	struct device *dev = rsnd_priv_to_dev(priv);
@@ -281,45 +356,30 @@ static int rsnd_gen1_probe(struct platform_device *pdev,
 
 }
 
-static void rsnd_gen1_remove(struct platform_device *pdev,
-			     struct rsnd_priv *priv)
-{
-}
-
-static struct rsnd_gen_ops rsnd_gen1_ops = {
-	.probe		= rsnd_gen1_probe,
-	.remove		= rsnd_gen1_remove,
-	.path_init	= rsnd_gen1_path_init,
-	.path_exit	= rsnd_gen1_path_exit,
-};
-
 /*
  *		Gen
  */
-int rsnd_gen_path_init(struct rsnd_priv *priv,
-		       struct rsnd_dai *rdai,
-		       struct rsnd_dai_stream *io)
+static void rsnd_of_parse_gen(struct platform_device *pdev,
+			      const struct rsnd_of_data *of_data,
+			      struct rsnd_priv *priv)
 {
-	struct rsnd_gen *gen = rsnd_priv_to_gen(priv);
+	struct rcar_snd_info *info = priv->info;
 
-	return gen->ops->path_init(priv, rdai, io);
-}
+	if (!of_data)
+		return;
 
-int rsnd_gen_path_exit(struct rsnd_priv *priv,
-		       struct rsnd_dai *rdai,
-		       struct rsnd_dai_stream *io)
-{
-	struct rsnd_gen *gen = rsnd_priv_to_gen(priv);
-
-	return gen->ops->path_exit(priv, rdai, io);
+	info->flags = of_data->flags;
 }
 
 int rsnd_gen_probe(struct platform_device *pdev,
-		   struct rcar_snd_info *info,
+		   const struct rsnd_of_data *of_data,
 		   struct rsnd_priv *priv)
 {
 	struct device *dev = rsnd_priv_to_dev(priv);
 	struct rsnd_gen *gen;
+	int ret;
+
+	rsnd_of_parse_gen(pdev, of_data, priv);
 
 	gen = devm_kzalloc(dev, sizeof(*gen), GFP_KERNEL);
 	if (!gen) {
@@ -327,23 +387,16 @@ int rsnd_gen_probe(struct platform_device *pdev,
 		return -ENOMEM;
 	}
 
-	if (rsnd_is_gen1(priv))
-		gen->ops = &rsnd_gen1_ops;
-
-	if (!gen->ops) {
-		dev_err(dev, "unknown generation R-Car sound device\n");
-		return -ENODEV;
-	}
-
 	priv->gen = gen;
 
-	return gen->ops->probe(pdev, info, priv);
-}
+	ret = -ENODEV;
+	if (rsnd_is_gen1(priv))
+		ret = rsnd_gen1_probe(pdev, priv);
+	else if (rsnd_is_gen2(priv))
+		ret = rsnd_gen2_probe(pdev, priv);
 
-void rsnd_gen_remove(struct platform_device *pdev,
-		     struct rsnd_priv *priv)
-{
-	struct rsnd_gen *gen = rsnd_priv_to_gen(priv);
+	if (ret < 0)
+		dev_err(dev, "unknown generation R-Car sound device\n");
 
-	gen->ops->remove(pdev, priv);
+	return ret;
 }

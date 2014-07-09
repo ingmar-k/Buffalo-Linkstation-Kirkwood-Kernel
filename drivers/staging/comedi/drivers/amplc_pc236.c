@@ -356,7 +356,7 @@ static int pc236_intr_cancel(struct comedi_device *dev,
 static irqreturn_t pc236_interrupt(int irq, void *d)
 {
 	struct comedi_device *dev = d;
-	struct comedi_subdevice *s = &dev->subdevices[1];
+	struct comedi_subdevice *s = dev->read_subdev;
 	int handled;
 
 	handled = pc236_intr_check(dev);
@@ -366,32 +366,6 @@ static irqreturn_t pc236_interrupt(int irq, void *d)
 		comedi_event(dev, s);
 	}
 	return IRQ_RETVAL(handled);
-}
-
-static void pc236_report_attach(struct comedi_device *dev, unsigned int irq)
-{
-	const struct pc236_board *thisboard = comedi_board(dev);
-	struct pci_dev *pcidev = comedi_to_pci_dev(dev);
-	char tmpbuf[60];
-	int tmplen;
-
-	if (is_isa_board(thisboard))
-		tmplen = scnprintf(tmpbuf, sizeof(tmpbuf),
-				   "(base %#lx) ", dev->iobase);
-	else if (is_pci_board(thisboard))
-		tmplen = scnprintf(tmpbuf, sizeof(tmpbuf),
-				   "(pci %s) ", pci_name(pcidev));
-	else
-		tmplen = 0;
-	if (irq)
-		tmplen += scnprintf(&tmpbuf[tmplen], sizeof(tmpbuf) - tmplen,
-				    "(irq %u%s) ", irq,
-				    (dev->irq ? "" : " UNAVAILABLE"));
-	else
-		tmplen += scnprintf(&tmpbuf[tmplen], sizeof(tmpbuf) - tmplen,
-				    "(no irq) ");
-	dev_info(dev->class_dev, "%s %sattached\n",
-		 dev->board_name, tmpbuf);
 }
 
 static int pc236_common_attach(struct comedi_device *dev, unsigned long iobase,
@@ -411,10 +385,9 @@ static int pc236_common_attach(struct comedi_device *dev, unsigned long iobase,
 	s = &dev->subdevices[0];
 	/* digital i/o subdevice (8255) */
 	ret = subdev_8255_init(dev, s, NULL, iobase);
-	if (ret < 0) {
-		dev_err(dev->class_dev, "error! out of memory!\n");
+	if (ret)
 		return ret;
-	}
+
 	s = &dev->subdevices[1];
 	dev->read_subdev = s;
 	s->type = COMEDI_SUBD_UNUSED;
@@ -434,8 +407,8 @@ static int pc236_common_attach(struct comedi_device *dev, unsigned long iobase,
 			s->cancel = pc236_intr_cancel;
 		}
 	}
-	pc236_report_attach(dev, irq);
-	return 1;
+
+	return 0;
 }
 
 static int pc236_pci_common_attach(struct comedi_device *dev,
@@ -567,7 +540,7 @@ static struct comedi_driver amplc_pc236_driver = {
 };
 
 #if DO_PCI
-static DEFINE_PCI_DEVICE_TABLE(pc236_pci_table) = {
+static const struct pci_device_id pc236_pci_table[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_AMPLICON, PCI_DEVICE_ID_AMPLICON_PCI236) },
 	{0}
 };

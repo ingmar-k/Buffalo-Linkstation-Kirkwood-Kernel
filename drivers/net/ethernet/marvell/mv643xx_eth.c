@@ -33,8 +33,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -731,7 +730,7 @@ static int txq_submit_skb(struct tx_queue *txq, struct sk_buff *skb)
 		    unlikely(tag_bytes & ~12)) {
 			if (skb_checksum_help(skb) == 0)
 				goto no_csum;
-			kfree_skb(skb);
+			dev_kfree_skb_any(skb);
 			return 1;
 		}
 
@@ -820,7 +819,7 @@ static netdev_tx_t mv643xx_eth_xmit(struct sk_buff *skb, struct net_device *dev)
 	if (txq->tx_ring_size - txq->tx_desc_count < MAX_SKB_FRAGS + 1) {
 		if (net_ratelimit())
 			netdev_err(dev, "tx queue full?!\n");
-		kfree_skb(skb);
+		dev_kfree_skb_any(skb);
 		return NETDEV_TX_OK;
 	}
 
@@ -2067,23 +2066,6 @@ static inline void oom_timer_wrapper(unsigned long data)
 	napi_schedule(&mp->napi);
 }
 
-static void phy_reset(struct mv643xx_eth_private *mp)
-{
-	int data;
-
-	data = phy_read(mp->phy, MII_BMCR);
-	if (data < 0)
-		return;
-
-	data |= BMCR_RESET;
-	if (phy_write(mp->phy, MII_BMCR, data) < 0)
-		return;
-
-	do {
-		data = phy_read(mp->phy, MII_BMCR);
-	} while (data >= 0 && data & BMCR_RESET);
-}
-
 static void port_start(struct mv643xx_eth_private *mp)
 {
 	u32 pscr;
@@ -2096,8 +2078,9 @@ static void port_start(struct mv643xx_eth_private *mp)
 		struct ethtool_cmd cmd;
 
 		mv643xx_eth_get_settings(mp->dev, &cmd);
-		phy_reset(mp);
+		phy_init_hw(mp->phy);
 		mv643xx_eth_set_settings(mp->dev, &cmd);
+		phy_start(mp->phy);
 	}
 
 	/*
@@ -2293,7 +2276,8 @@ static int mv643xx_eth_stop(struct net_device *dev)
 	del_timer_sync(&mp->rx_oom);
 
 	netif_carrier_off(dev);
-
+	if (mp->phy)
+		phy_stop(mp->phy);
 	free_irq(dev->irq, dev);
 
 	port_reset(mp);
@@ -2763,8 +2747,6 @@ static struct phy_device *phy_scan(struct mv643xx_eth_private *mp,
 static void phy_init(struct mv643xx_eth_private *mp, int speed, int duplex)
 {
 	struct phy_device *phy = mp->phy;
-
-	phy_reset(mp);
 
 	if (speed == 0) {
 		phy->autoneg = AUTONEG_ENABLE;

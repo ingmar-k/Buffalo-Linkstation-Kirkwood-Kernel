@@ -407,8 +407,8 @@ int arch_setup_msi_irqs(struct pci_dev *pdev, int nvec, int type)
 	struct msi_msg msg;
 	int rc;
 
-	if (type != PCI_CAP_ID_MSIX && type != PCI_CAP_ID_MSI)
-		return -EINVAL;
+	if (type == PCI_CAP_ID_MSI && nvec > 1)
+		return 1;
 	msi_vecs = min(nvec, ZPCI_MSI_VEC_MAX);
 	msi_vecs = min_t(unsigned int, msi_vecs, CONFIG_PCI_NR_MSI);
 
@@ -686,27 +686,13 @@ int pcibios_add_device(struct pci_dev *pdev)
 int pcibios_enable_device(struct pci_dev *pdev, int mask)
 {
 	struct zpci_dev *zdev = get_zdev(pdev);
-	struct resource *res;
-	u16 cmd;
-	int i;
 
 	zdev->pdev = pdev;
 	zpci_debug_init_device(zdev);
 	zpci_fmb_enable_device(zdev);
 	zpci_map_resources(zdev);
 
-	pci_read_config_word(pdev, PCI_COMMAND, &cmd);
-	for (i = 0; i < PCI_BAR_COUNT; i++) {
-		res = &pdev->resource[i];
-
-		if (res->flags & IORESOURCE_IO)
-			return -EINVAL;
-
-		if (res->flags & IORESOURCE_MEM)
-			cmd |= PCI_COMMAND_MEMORY;
-	}
-	pci_write_config_word(pdev, PCI_COMMAND, cmd);
-	return 0;
+	return pci_enable_resources(pdev, mask);
 }
 
 void pcibios_disable_device(struct pci_dev *pdev)
@@ -919,15 +905,21 @@ static void zpci_mem_exit(void)
 	kmem_cache_destroy(zdev_fmb_cache);
 }
 
-static unsigned int s390_pci_probe;
+static unsigned int s390_pci_probe = 1;
+static unsigned int s390_pci_initialized;
 
 char * __init pcibios_setup(char *str)
 {
-	if (!strcmp(str, "on")) {
-		s390_pci_probe = 1;
+	if (!strcmp(str, "off")) {
+		s390_pci_probe = 0;
 		return NULL;
 	}
 	return str;
+}
+
+bool zpci_is_enabled(void)
+{
+	return s390_pci_initialized;
 }
 
 static int __init pci_base_init(void)
@@ -961,6 +953,7 @@ static int __init pci_base_init(void)
 	if (rc)
 		goto out_find;
 
+	s390_pci_initialized = 1;
 	return 0;
 
 out_find:
@@ -978,5 +971,6 @@ subsys_initcall_sync(pci_base_init);
 
 void zpci_rescan(void)
 {
-	clp_rescan_pci_devices_simple();
+	if (zpci_is_enabled())
+		clp_rescan_pci_devices_simple();
 }

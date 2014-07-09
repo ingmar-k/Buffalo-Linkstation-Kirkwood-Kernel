@@ -5,7 +5,7 @@
  *
  * GPL LICENSE SUMMARY
  *
- * Copyright(c) 2007 - 2013 Intel Corporation. All rights reserved.
+ * Copyright(c) 2007 - 2014 Intel Corporation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -30,7 +30,7 @@
  *
  * BSD LICENSE
  *
- * Copyright(c) 2005 - 2013 Intel Corporation. All rights reserved.
+ * Copyright(c) 2005 - 2014 Intel Corporation. All rights reserved.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -84,6 +84,7 @@ enum iwl_device_family {
 	IWL_DEVICE_FAMILY_6050,
 	IWL_DEVICE_FAMILY_6150,
 	IWL_DEVICE_FAMILY_7000,
+	IWL_DEVICE_FAMILY_8000,
 };
 
 /*
@@ -129,6 +130,12 @@ enum iwl_led_mode {
 #define ANT_BC		(ANT_B | ANT_C)
 #define ANT_ABC		(ANT_A | ANT_B | ANT_C)
 
+static inline u8 num_of_ant(u8 mask)
+{
+	return  !!((mask) & ANT_A) +
+		!!((mask) & ANT_B) +
+		!!((mask) & ANT_C);
+}
 
 /*
  * @max_ll_items: max number of OTP blocks
@@ -156,12 +163,14 @@ struct iwl_base_params {
 };
 
 /*
+ * @stbc: support Tx STBC and 1*SS Rx STBC
  * @use_rts_for_aggregation: use rts/cts protection for HT traffic
  * @ht40_bands: bitmap of bands (using %IEEE80211_BAND_*) that support HT40
  */
 struct iwl_ht_params {
 	enum ieee80211_smps_mode smps_mode;
 	const bool ht_greenfield_support; /* if used set to true */
+	const bool stbc;
 	bool use_rts_for_aggregation;
 	u8 ht40_bands;
 };
@@ -182,6 +191,15 @@ struct iwl_ht_params {
 struct iwl_eeprom_params {
 	const u8 regulatory_bands[7];
 	bool enhanced_txpower;
+};
+
+/* Tx-backoff power threshold
+ * @pwr: The power limit in mw
+ * @backoff: The tx-backoff in uSec
+ */
+struct iwl_pwr_tx_backoff {
+	u32 pwr;
+	u32 backoff;
 };
 
 /**
@@ -209,6 +227,9 @@ struct iwl_eeprom_params {
  * @high_temp: Is this NIC is designated to be in high temperature.
  * @host_interrupt_operation_mode: device needs host interrupt operation
  *	mode set
+ * @d0i3: device uses d0i3 instead of d3
+ * @nvm_hw_section_num: the ID of the HW NVM section
+ * @pwr_tx_backoffs: translation table between power limits and backoffs
  *
  * We enable the driver to be backward compatible wrt. hardware features.
  * API differences in uCode shouldn't be handled here but through TLVs
@@ -239,6 +260,10 @@ struct iwl_cfg {
 	const bool internal_wimax_coex;
 	const bool host_interrupt_operation_mode;
 	bool high_temp;
+	bool d0i3;
+	u8   nvm_hw_section_num;
+	bool lp_xtal_workaround;
+	const struct iwl_pwr_tx_backoff *pwr_tx_backoffs;
 };
 
 /*
@@ -299,6 +324,8 @@ extern const struct iwl_cfg iwl3160_n_cfg;
 extern const struct iwl_cfg iwl7265_2ac_cfg;
 extern const struct iwl_cfg iwl7265_2n_cfg;
 extern const struct iwl_cfg iwl7265_n_cfg;
+extern const struct iwl_cfg iwl8260_2ac_cfg;
+extern const struct iwl_cfg iwl8260_n_cfg;
 #endif /* CONFIG_IWLMVM */
 
 #endif /* __IWL_CONFIG_H__ */

@@ -62,7 +62,6 @@ static int is_any_reiserfs_magic_string(struct reiserfs_super_block *rs)
 
 static int reiserfs_remount(struct super_block *s, int *flags, char *data);
 static int reiserfs_statfs(struct dentry *dentry, struct kstatfs *buf);
-void show_alloc_options(struct seq_file *seq, struct super_block *s);
 
 static int reiserfs_sync_fs(struct super_block *s, int wait)
 {
@@ -597,7 +596,7 @@ static void init_once(void *foo)
 	inode_init_once(&ei->vfs_inode);
 }
 
-static int init_inodecache(void)
+static int __init init_inodecache(void)
 {
 	reiserfs_inode_cachep = kmem_cache_create("reiser_inode_cache",
 						  sizeof(struct
@@ -1319,6 +1318,7 @@ static int reiserfs_remount(struct super_block *s, int *mount_flags, char *arg)
 	int i;
 #endif
 
+	sync_filesystem(s);
 	reiserfs_write_lock(s);
 
 #ifdef CONFIG_QUOTA
@@ -1479,7 +1479,7 @@ static int read_super_block(struct super_block *s, int offset)
 	if (!bh) {
 		reiserfs_warning(s, "sh-2006",
 				 "bread failed (dev %s, block %lu, size %lu)",
-				 reiserfs_bdevname(s), offset / s->s_blocksize,
+				 s->s_id, offset / s->s_blocksize,
 				 s->s_blocksize);
 		return 1;
 	}
@@ -1500,7 +1500,7 @@ static int read_super_block(struct super_block *s, int offset)
 	if (!bh) {
 		reiserfs_warning(s, "sh-2007",
 				 "bread failed (dev %s, block %lu, size %lu)",
-				 reiserfs_bdevname(s), offset / s->s_blocksize,
+				 s->s_id, offset / s->s_blocksize,
 				 s->s_blocksize);
 		return 1;
 	}
@@ -1509,7 +1509,7 @@ static int read_super_block(struct super_block *s, int offset)
 	if (sb_blocksize(rs) != s->s_blocksize) {
 		reiserfs_warning(s, "sh-2011", "can't find a reiserfs "
 				 "filesystem on (dev %s, block %Lu, size %lu)",
-				 reiserfs_bdevname(s),
+				 s->s_id,
 				 (unsigned long long)bh->b_blocknr,
 				 s->s_blocksize);
 		brelse(bh);
@@ -1825,7 +1825,7 @@ static int reiserfs_fill_super(struct super_block *s, void *data, int silent)
 	/* try new format (64-th 1k block), which can contain reiserfs super block */
 	else if (read_super_block(s, REISERFS_DISK_OFFSET_IN_BYTES)) {
 		SWARN(silent, s, "sh-2021", "can not find reiserfs on %s",
-		      reiserfs_bdevname(s));
+		      s->s_id);
 		goto error_unlocked;
 	}
 

@@ -352,8 +352,6 @@ static int ak8975_read_axis(struct iio_dev *indio_dev, int index, int *val)
 {
 	struct ak8975_data *data = iio_priv(indio_dev);
 	struct i2c_client *client = data->client;
-	u16 meas_reg;
-	s16 raw;
 	int ret;
 
 	mutex_lock(&data->lock);
@@ -401,16 +399,11 @@ static int ak8975_read_axis(struct iio_dev *indio_dev, int index, int *val)
 		dev_err(&client->dev, "Read axis data fails\n");
 		goto exit;
 	}
-	meas_reg = ret;
 
 	mutex_unlock(&data->lock);
 
-	/* Endian conversion of the measured values. */
-	raw = (s16) (le16_to_cpu(meas_reg));
-
 	/* Clamp to valid range. */
-	raw = clamp_t(s16, raw, -4096, 4095);
-	*val = raw;
+	*val = clamp_t(s16, ret, -4096, 4095);
 	return IIO_VAL_INT;
 
 exit:
@@ -513,6 +506,7 @@ static int ak8975_probe(struct i2c_client *client,
 	indio_dev->channels = ak8975_channels;
 	indio_dev->num_channels = ARRAY_SIZE(ak8975_channels);
 	indio_dev->info = &ak8975_info;
+	indio_dev->name = id->name;
 	indio_dev->modes = INDIO_DIRECT_MODE;
 
 	err = iio_device_register(indio_dev);

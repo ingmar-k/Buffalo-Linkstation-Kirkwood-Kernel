@@ -628,7 +628,7 @@ static int lmv_disconnect_mdc(struct obd_device *obd, struct lmv_tgt_desc *tgt)
 
 	rc = obd_fid_fini(tgt->ltd_exp->exp_obd);
 	if (rc)
-		CERROR("Can't finanize fids factory\n");
+		CERROR("Can't finalize fids factory\n");
 
 	CDEBUG(D_INFO, "Disconnected from %s(%s) successfully\n",
 	       tgt->ltd_exp->exp_obd->obd_name,
@@ -712,7 +712,7 @@ repeat_fid2path:
 		GOTO(out_fid2path, rc);
 
 	/* If remote_gf != NULL, it means just building the
-	 * path on the remote MDT, copy this path segement to gf */
+	 * path on the remote MDT, copy this path segment to gf */
 	if (remote_gf != NULL) {
 		struct getinfo_fid2path *ori_gf;
 		char *ptr;
@@ -1212,7 +1212,7 @@ static int lmv_placement_policy(struct obd_device *obd,
 
 	/**
 	 * If stripe_offset is provided during setdirstripe
-	 * (setdirstripe -i xx), xx MDS will be choosen.
+	 * (setdirstripe -i xx), xx MDS will be chosen.
 	 */
 	if (op_data->op_cli_flags & CLI_SET_MEA) {
 		struct lmv_user_md *lum;
@@ -1744,7 +1744,6 @@ lmv_enqueue_remote(struct obd_export *exp, struct ldlm_enqueue_info *einfo,
 	it->d.lustre.it_data = NULL;
 	fid1 = body->fid1;
 
-	it->d.lustre.it_disposition &= ~DISP_ENQ_COMPLETE;
 	ptlrpc_req_finished(req);
 
 	tgt = lmv_find_target(lmv, &fid1);
@@ -2593,7 +2592,7 @@ int lmv_free_lustre_md(struct obd_export *exp, struct lustre_md *md)
 
 int lmv_set_open_replay_data(struct obd_export *exp,
 			     struct obd_client_handle *och,
-			     struct ptlrpc_request *open_req)
+			     struct lookup_intent *it)
 {
 	struct obd_device       *obd = exp->exp_obd;
 	struct lmv_obd	  *lmv = &obd->u.lmv;
@@ -2603,7 +2602,7 @@ int lmv_set_open_replay_data(struct obd_export *exp,
 	if (IS_ERR(tgt))
 		return PTR_ERR(tgt);
 
-	return md_set_open_replay_data(tgt->ltd_exp, och, open_req);
+	return md_set_open_replay_data(tgt->ltd_exp, och, it);
 }
 
 int lmv_clear_open_replay_data(struct obd_export *exp,

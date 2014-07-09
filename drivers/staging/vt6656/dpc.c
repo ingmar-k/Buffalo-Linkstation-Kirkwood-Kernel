@@ -38,6 +38,7 @@
  *
  */
 
+#include "dpc.h"
 #include "device.h"
 #include "rxtx.h"
 #include "tether.h"
@@ -59,7 +60,7 @@
 //static int          msglevel                =MSG_LEVEL_DEBUG;
 static int          msglevel                =MSG_LEVEL_INFO;
 
-const u8 acbyRxRate[MAX_RATE] =
+static const u8 acbyRxRate[MAX_RATE] =
 {2, 4, 11, 22, 12, 18, 24, 36, 48, 72, 96, 108};
 
 static u8 s_byGetRateIdx(u8 byRate);
@@ -291,12 +292,14 @@ int RXbBulkInProcessData(struct vnt_private *pDevice, struct vnt_rcb *pRCB,
 
 	if (BytesToIndicate != FrameSize) {
 		DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"------- WRONG Length 1\n");
+		pStats->rx_frame_errors++;
 		return false;
 	}
 
     if ((BytesToIndicate > 2372) || (BytesToIndicate <= 40)) {
         // Frame Size error drop this packet.
 	DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO "---------- WRONG Length 2\n");
+	pStats->rx_frame_errors++;
         return false;
     }
 
@@ -314,6 +317,7 @@ int RXbBulkInProcessData(struct vnt_private *pDevice, struct vnt_rcb *pRCB,
          (BytesToIndicate < (*pwPLCP_Length)) ) {
 
         DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"Wrong PLCP Length %x\n", (int) *pwPLCP_Length);
+	pStats->rx_frame_errors++;
         return false;
     }
     for ( ii=RATE_1M;ii<MAX_RATE;ii++) {
@@ -344,16 +348,6 @@ int RXbBulkInProcessData(struct vnt_private *pDevice, struct vnt_rcb *pRCB,
     FrameSize = *pwPLCP_Length;
 
     pbyFrame = pbyDAddress + 8;
-    // update receive statistic counter
-
-    STAvUpdateRDStatCounter(&pDevice->scStatistic,
-                            *pbyRsr,
-                            *pbyNewRsr,
-                            *pbyRxSts,
-                            *pbyRxRate,
-                            pbyFrame,
-                            FrameSize
-                            );
 
     pMACHeader = (struct ieee80211_hdr *) pbyFrame;
 
@@ -370,7 +364,6 @@ int RXbBulkInProcessData(struct vnt_private *pDevice, struct vnt_rcb *pRCB,
 
     if (!is_multicast_ether_addr(pMACHeader->addr1)) {
         if (WCTLbIsDuplicate(&(pDevice->sDupRxCache), (struct ieee80211_hdr *) pbyFrame)) {
-            pDevice->s802_11Counter.FrameDuplicateCount++;
             return false;
         }
 
@@ -450,14 +443,6 @@ int RXbBulkInProcessData(struct vnt_private *pDevice, struct vnt_rcb *pRCB,
                     (pMgmt->eAuthenMode == WMAC_AUTH_WPANONE) ||
                     (pMgmt->eAuthenMode == WMAC_AUTH_WPA2) ||
                     (pMgmt->eAuthenMode == WMAC_AUTH_WPA2PSK)) {
-
-                    if ((pKey != NULL) && (pKey->byCipherSuite == KEY_CTL_TKIP)) {
-                        pDevice->s802_11Counter.TKIPICVErrors++;
-                    } else if ((pKey != NULL) && (pKey->byCipherSuite == KEY_CTL_CCMP)) {
-                        pDevice->s802_11Counter.CCMPDecryptErrors++;
-                    } else if ((pKey != NULL) && (pKey->byCipherSuite == KEY_CTL_WEP)) {
-//                      pDevice->s802_11Counter.WEPICVErrorCount.QuadPart++;
-                    }
                 }
                 return false;
             }
@@ -482,7 +467,6 @@ int RXbBulkInProcessData(struct vnt_private *pDevice, struct vnt_rcb *pRCB,
         ) {
         // defragment
         bDeFragRx = WCTLbHandleFragment(pDevice, (struct ieee80211_hdr *) (pbyFrame), FrameSize, bIsWEP, bExtIV);
-        pDevice->s802_11Counter.ReceivedFragmentCount++;
         if (bDeFragRx) {
             // defrag complete
             // TODO skb, pbyFrame
@@ -643,7 +627,7 @@ int RXbBulkInProcessData(struct vnt_private *pDevice, struct vnt_rcb *pRCB,
 
     // Now it only supports 802.11g Infrastructure Mode, and support rate must up to 54 Mbps
     if (pDevice->bDiversityEnable && (FrameSize>50) &&
-       (pDevice->eOPMode == OP_MODE_INFRASTRUCTURE) &&
+	pDevice->op_mode == NL80211_IFTYPE_STATION &&
        (pDevice->bLinkPass == true)) {
         BBvAntennaDiversity(pDevice, s_byGetRateIdx(*pbyRxRate), 0);
     }
@@ -760,8 +744,6 @@ int RXbBulkInProcessData(struct vnt_private *pDevice, struct vnt_rcb *pRCB,
                 (pDevice->bRxMICFail == true)) {
                 DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"MIC comparison is fail!\n");
                 pDevice->bRxMICFail = false;
-                //pDevice->s802_11Counter.TKIPLocalMICFailures.QuadPart++;
-                pDevice->s802_11Counter.TKIPLocalMICFailures++;
                 if (bDeFragRx) {
                     if (!device_alloc_frag_buf(pDevice, &pDevice->sRxDFCB[pDevice->uCurrentDFCBIdx])) {
                         DBG_PRT(MSG_LEVEL_ERR,KERN_ERR "%s: can not alloc more frag bufs\n",
@@ -824,12 +806,6 @@ int RXbBulkInProcessData(struct vnt_private *pDevice, struct vnt_rcb *pRCB,
                      (dwRxTSC47_16 <= dwLocalTSC47_16) &&
                      !((dwRxTSC47_16 == 0) && (dwLocalTSC47_16 == 0xFFFFFFFF))) {
                     DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"TSC is illegal~~!\n ");
-                    if (pKey->byCipherSuite == KEY_CTL_TKIP)
-                        //pDevice->s802_11Counter.TKIPReplays.QuadPart++;
-                        pDevice->s802_11Counter.TKIPReplays++;
-                    else
-                        //pDevice->s802_11Counter.CCMPReplays.QuadPart++;
-                        pDevice->s802_11Counter.CCMPReplays++;
 
                     if (bDeFragRx) {
                         if (!device_alloc_frag_buf(pDevice, &pDevice->sRxDFCB[pDevice->uCurrentDFCBIdx])) {
@@ -1061,19 +1037,9 @@ static int s_bHandleRxEncryption(struct vnt_private *pDevice, u8 *pbyFrame,
 
     if (pKey == NULL) {
         DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"pKey == NULL\n");
-        if (byDecMode == KEY_CTL_WEP) {
-//            pDevice->s802_11Counter.WEPUndecryptableCount.QuadPart++;
-        } else if (pDevice->bLinkPass == true) {
-//            pDevice->s802_11Counter.DecryptFailureCount.QuadPart++;
-        }
         return false;
     }
     if (byDecMode != pKey->byCipherSuite) {
-        if (byDecMode == KEY_CTL_WEP) {
-//            pDevice->s802_11Counter.WEPUndecryptableCount.QuadPart++;
-        } else if (pDevice->bLinkPass == true) {
-//            pDevice->s802_11Counter.DecryptFailureCount.QuadPart++;
-        }
         *pKeyOut = NULL;
         return false;
     }
@@ -1164,11 +1130,6 @@ static int s_bHostWepRxEncryption(struct vnt_private *pDevice, u8 *pbyFrame,
     DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"AES:%d %d %d\n", pMgmt->byCSSPK, pMgmt->byCSSGK, byDecMode);
 
     if (byDecMode != pKey->byCipherSuite) {
-        if (byDecMode == KEY_CTL_WEP) {
-//            pDevice->s802_11Counter.WEPUndecryptableCount.QuadPart++;
-        } else if (pDevice->bLinkPass == true) {
-//            pDevice->s802_11Counter.DecryptFailureCount.QuadPart++;
-        }
         return false;
     }
 
@@ -1266,14 +1227,13 @@ static int s_bAPModeRxData(struct vnt_private *pDevice, struct sk_buff *skb,
     if (is_multicast_ether_addr((u8 *)(skb->data+cbHeaderOffset))) {
        if (pMgmt->sNodeDBTable[0].bPSEnable) {
 
-           skbcpy = dev_alloc_skb((int)pDevice->rx_buf_sz);
+	    skbcpy = netdev_alloc_skb(pDevice->dev, pDevice->rx_buf_sz);
 
         // if any node in PS mode, buffer packet until DTIM.
            if (skbcpy == NULL) {
                DBG_PRT(MSG_LEVEL_NOTICE, KERN_INFO "relay multicast no skb available \n");
            }
            else {
-               skbcpy->dev = pDevice->dev;
                skbcpy->len = FrameSize;
                memcpy(skbcpy->data, skb->data+cbHeaderOffset, FrameSize);
                skb_queue_tail(&(pMgmt->sNodeDBTable[0].sTxPSQueue), skbcpy);
@@ -1334,63 +1294,66 @@ static int s_bAPModeRxData(struct vnt_private *pDevice, struct sk_buff *skb,
 
 void RXvWorkItem(struct work_struct *work)
 {
-	struct vnt_private *pDevice =
+	struct vnt_private *priv =
 		container_of(work, struct vnt_private, read_work_item);
-	int ntStatus;
-	struct vnt_rcb *pRCB = NULL;
+	int status;
+	struct vnt_rcb *rcb = NULL;
 
-	if (pDevice->Flags & fMP_DISCONNECTED)
+	if (priv->Flags & fMP_DISCONNECTED)
 		return;
 
-    DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"---->Rx Polling Thread\n");
-    spin_lock_irq(&pDevice->lock);
+	DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"---->Rx Polling Thread\n");
 
-    while ((pDevice->Flags & fMP_POST_READS) &&
-            MP_IS_READY(pDevice) &&
-            (pDevice->NumRecvFreeList != 0) ) {
-        pRCB = pDevice->FirstRecvFreeList;
-        pDevice->NumRecvFreeList--;
-        DequeueRCB(pDevice->FirstRecvFreeList, pDevice->LastRecvFreeList);
-        ntStatus = PIPEnsBulkInUsbRead(pDevice, pRCB);
-    }
-    pDevice->bIsRxWorkItemQueued = false;
-    spin_unlock_irq(&pDevice->lock);
+	spin_lock_irq(&priv->lock);
 
-}
+	while ((priv->Flags & fMP_POST_READS) && MP_IS_READY(priv) &&
+			(priv->NumRecvFreeList != 0)) {
+		rcb = priv->FirstRecvFreeList;
 
-void RXvFreeRCB(struct vnt_rcb *pRCB, int bReAllocSkb)
-{
-	struct vnt_private *pDevice = pRCB->pDevice;
+		priv->NumRecvFreeList--;
 
-    DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"---->RXvFreeRCB\n");
+		DequeueRCB(priv->FirstRecvFreeList, priv->LastRecvFreeList);
 
-	if (bReAllocSkb == false) {
-		kfree_skb(pRCB->skb);
-		bReAllocSkb = true;
+		status = PIPEnsBulkInUsbRead(priv, rcb);
 	}
 
-    if (bReAllocSkb == true) {
-        pRCB->skb = dev_alloc_skb((int)pDevice->rx_buf_sz);
-        // todo error handling
-        if (pRCB->skb == NULL) {
-            DBG_PRT(MSG_LEVEL_ERR,KERN_ERR" Failed to re-alloc rx skb\n");
-        }else {
-            pRCB->skb->dev = pDevice->dev;
-        }
-    }
-    //
-    // Insert the RCB back in the Recv free list
-    //
-    EnqueueRCB(pDevice->FirstRecvFreeList, pDevice->LastRecvFreeList, pRCB);
-    pDevice->NumRecvFreeList++;
+	priv->bIsRxWorkItemQueued = false;
 
-    if ((pDevice->Flags & fMP_POST_READS) && MP_IS_READY(pDevice) &&
-        (pDevice->bIsRxWorkItemQueued == false) ) {
+	spin_unlock_irq(&priv->lock);
+}
 
-        pDevice->bIsRxWorkItemQueued = true;
-	schedule_work(&pDevice->read_work_item);
-    }
-    DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"<----RXFreeRCB %d %d\n",pDevice->NumRecvFreeList, pDevice->NumRecvMngList);
+void RXvFreeRCB(struct vnt_rcb *rcb, int re_alloc_skb)
+{
+	struct vnt_private *priv = rcb->pDevice;
+
+	DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"---->RXvFreeRCB\n");
+
+	if (re_alloc_skb == false) {
+		kfree_skb(rcb->skb);
+		re_alloc_skb = true;
+	}
+
+	if (re_alloc_skb == true) {
+		rcb->skb = netdev_alloc_skb(priv->dev, priv->rx_buf_sz);
+		/* TODO error handling */
+		if (!rcb->skb) {
+			DBG_PRT(MSG_LEVEL_ERR, KERN_ERR
+				" Failed to re-alloc rx skb\n");
+		}
+	}
+
+	/* Insert the RCB back in the Recv free list */
+	EnqueueRCB(priv->FirstRecvFreeList, priv->LastRecvFreeList, rcb);
+	priv->NumRecvFreeList++;
+
+	if ((priv->Flags & fMP_POST_READS) && MP_IS_READY(priv) &&
+			(priv->bIsRxWorkItemQueued == false)) {
+		priv->bIsRxWorkItemQueued = true;
+		schedule_work(&priv->read_work_item);
+	}
+
+	DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"<----RXFreeRCB %d %d\n",
+			priv->NumRecvFreeList, priv->NumRecvMngList);
 }
 
 void RXvMngWorkItem(struct work_struct *work)

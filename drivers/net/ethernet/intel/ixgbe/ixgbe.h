@@ -20,6 +20,7 @@
   the file called "COPYING".
 
   Contact Information:
+  Linux NICS <linux.nics@intel.com>
   e1000-devel Mailing List <e1000-devel@lists.sourceforge.net>
   Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
 
@@ -255,7 +256,6 @@ struct ixgbe_ring {
 		struct ixgbe_tx_buffer *tx_buffer_info;
 		struct ixgbe_rx_buffer *rx_buffer_info;
 	};
-	unsigned long last_rx_timestamp;
 	unsigned long state;
 	u8 __iomem *tail;
 	dma_addr_t dma;			/* phys. address of descriptor ring */
@@ -424,9 +424,10 @@ static inline bool ixgbe_qv_lock_napi(struct ixgbe_q_vector *q_vector)
 #ifdef BP_EXTENDED_STATS
 		q_vector->tx.ring->stats.yields++;
 #endif
-	} else
+	} else {
 		/* we don't care if someone yielded */
 		q_vector->state = IXGBE_QV_STATE_NAPI;
+	}
 	spin_unlock_bh(&q_vector->lock);
 	return rc;
 }
@@ -458,9 +459,10 @@ static inline bool ixgbe_qv_lock_poll(struct ixgbe_q_vector *q_vector)
 #ifdef BP_EXTENDED_STATS
 		q_vector->rx.ring->stats.yields++;
 #endif
-	} else
+	} else {
 		/* preserve yield marks */
 		q_vector->state |= IXGBE_QV_STATE_POLL;
+	}
 	spin_unlock_bh(&q_vector->lock);
 	return rc;
 }
@@ -552,8 +554,10 @@ struct hwmon_attr {
 };
 
 struct hwmon_buff {
-	struct device *device;
-	struct hwmon_attr *hwmon_list;
+	struct attribute_group group;
+	const struct attribute_group *groups[2];
+	struct attribute *attrs[IXGBE_MAX_SENSORS * 4 + 1];
+	struct hwmon_attr hwmon_list[IXGBE_MAX_SENSORS * 4];
 	unsigned int n_hwmon;
 };
 #endif /* CONFIG_IXGBE_HWMON */
@@ -581,6 +585,11 @@ static inline u16 ixgbe_desc_unused(struct ixgbe_ring *ring)
 	u16 ntu = ring->next_to_use;
 
 	return ((ntc > ntu) ? 0 : ring->count) + ntc - ntu - 1;
+}
+
+static inline void ixgbe_write_tail(struct ixgbe_ring *ring, u32 value)
+{
+	writel(value, ring->tail);
 }
 
 #define IXGBE_RX_DESC(R, i)	    \
@@ -740,6 +749,7 @@ struct ixgbe_adapter {
 #ifdef IXGBE_FCOE
 	struct ixgbe_fcoe fcoe;
 #endif /* IXGBE_FCOE */
+	u8 __iomem *io_addr; /* Mainly for iounmap use */
 	u32 wol;
 
 	u16 bd_number;
@@ -755,9 +765,11 @@ struct ixgbe_adapter {
 	struct ptp_clock_info ptp_caps;
 	struct work_struct ptp_tx_work;
 	struct sk_buff *ptp_tx_skb;
+	struct hwtstamp_config tstamp_config;
 	unsigned long ptp_tx_start;
 	unsigned long last_overflow_check;
 	unsigned long last_rx_ptp_check;
+	unsigned long last_rx_timestamp;
 	spinlock_t tmreg_lock;
 	struct cyclecounter cc;
 	struct timecounter tc;
@@ -775,7 +787,7 @@ struct ixgbe_adapter {
 	u32 vferr_refcount;
 	struct kobject *info_kobj;
 #ifdef CONFIG_IXGBE_HWMON
-	struct hwmon_buff ixgbe_hwmon_buff;
+	struct hwmon_buff *ixgbe_hwmon_buff;
 #endif /* CONFIG_IXGBE_HWMON */
 #ifdef CONFIG_DEBUG_FS
 	struct dentry *ixgbe_dbg_adapter;
@@ -796,9 +808,13 @@ enum ixgbe_state_t {
 	__IXGBE_TESTING,
 	__IXGBE_RESETTING,
 	__IXGBE_DOWN,
+	__IXGBE_DISABLED,
+	__IXGBE_REMOVING,
 	__IXGBE_SERVICE_SCHED,
+	__IXGBE_SERVICE_INITED,
 	__IXGBE_IN_SFP_INIT,
 	__IXGBE_PTP_RUNNING,
+	__IXGBE_PTP_TX_IN_PROGRESS,
 };
 
 struct ixgbe_cb {
@@ -873,7 +889,6 @@ s32 ixgbe_fdir_erase_perfect_filter_82599(struct ixgbe_hw *hw,
 					  u16 soft_id);
 void ixgbe_atr_compute_perfect_hash_82599(union ixgbe_atr_input *input,
 					  union ixgbe_atr_input *mask);
-bool ixgbe_verify_lesm_fw_enabled_82599(struct ixgbe_hw *hw);
 void ixgbe_set_rx_mode(struct net_device *netdev);
 #ifdef CONFIG_IXGBE_DCB
 void ixgbe_set_rx_drop_en(struct ixgbe_adapter *adapter);
@@ -929,26 +944,9 @@ void ixgbe_ptp_init(struct ixgbe_adapter *adapter);
 void ixgbe_ptp_stop(struct ixgbe_adapter *adapter);
 void ixgbe_ptp_overflow_check(struct ixgbe_adapter *adapter);
 void ixgbe_ptp_rx_hang(struct ixgbe_adapter *adapter);
-void __ixgbe_ptp_rx_hwtstamp(struct ixgbe_q_vector *q_vector,
-			     struct sk_buff *skb);
-static inline void ixgbe_ptp_rx_hwtstamp(struct ixgbe_ring *rx_ring,
-					 union ixgbe_adv_rx_desc *rx_desc,
-					 struct sk_buff *skb)
-{
-	if (unlikely(!ixgbe_test_staterr(rx_desc, IXGBE_RXDADV_STAT_TS)))
-		return;
-
-	__ixgbe_ptp_rx_hwtstamp(rx_ring->q_vector, skb);
-
-	/*
-	 * Update the last_rx_timestamp timer in order to enable watchdog check
-	 * for error case of latched timestamp on a dropped packet.
-	 */
-	rx_ring->last_rx_timestamp = jiffies;
-}
-
-int ixgbe_ptp_hwtstamp_ioctl(struct ixgbe_adapter *adapter, struct ifreq *ifr,
-			     int cmd);
+void ixgbe_ptp_rx_hwtstamp(struct ixgbe_adapter *adapter, struct sk_buff *skb);
+int ixgbe_ptp_set_ts_config(struct ixgbe_adapter *adapter, struct ifreq *ifr);
+int ixgbe_ptp_get_ts_config(struct ixgbe_adapter *adapter, struct ifreq *ifr);
 void ixgbe_ptp_start_cyclecounter(struct ixgbe_adapter *adapter);
 void ixgbe_ptp_reset(struct ixgbe_adapter *adapter);
 void ixgbe_ptp_check_pps_event(struct ixgbe_adapter *adapter, u32 eicr);

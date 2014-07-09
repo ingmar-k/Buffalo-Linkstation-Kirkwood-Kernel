@@ -56,6 +56,7 @@
 #include "llite_internal.h"
 
 struct kmem_cache *ll_file_data_slab;
+struct proc_dir_entry *proc_lustre_fs_root;
 
 LIST_HEAD(ll_super_blocks);
 DEFINE_SPINLOCK(ll_sb_lock);
@@ -154,11 +155,6 @@ void ll_free_sbi(struct super_block *sb)
 	}
 }
 
-static struct dentry_operations ll_d_root_ops = {
-	.d_compare = ll_dcompare,
-	.d_revalidate = ll_revalidate_nd,
-};
-
 static int client_common_fill_super(struct super_block *sb, char *md, char *dt,
 				    struct vfsmount *mnt)
 {
@@ -209,7 +205,11 @@ static int client_common_fill_super(struct super_block *sb, char *md, char *dt,
 				  OBD_CONNECT_FULL20   | OBD_CONNECT_64BITHASH|
 				  OBD_CONNECT_EINPROGRESS |
 				  OBD_CONNECT_JOBSTATS | OBD_CONNECT_LVB_TYPE |
-				  OBD_CONNECT_LAYOUTLOCK | OBD_CONNECT_PINGLESS;
+				  OBD_CONNECT_LAYOUTLOCK |
+				  OBD_CONNECT_PINGLESS |
+				  OBD_CONNECT_MAX_EASIZE |
+				  OBD_CONNECT_FLOCK_DEAD |
+				  OBD_CONNECT_DISP_STRIPE;
 
 	if (sbi->ll_flags & LL_SBI_SOM_PREVIEW)
 		data->ocd_connect_flags |= OBD_CONNECT_SOM;
@@ -279,7 +279,7 @@ static int client_common_fill_super(struct super_block *sb, char *md, char *dt,
 
 	/* For mount, we only need fs info from MDT0, and also in DNE, it
 	 * can make sure the client can be mounted as long as MDT0 is
-	 * avaible */
+	 * available */
 	err = obd_statfs(NULL, sbi->ll_md_exp, osfs,
 			cfs_time_shift_64(-OBD_STATFS_CACHE_SECONDS),
 			OBD_STATFS_FOR_MDT0);
@@ -381,6 +381,17 @@ static int client_common_fill_super(struct super_block *sb, char *md, char *dt,
 	if (data->ocd_connect_flags & OBD_CONNECT_LAYOUTLOCK) {
 		LCONSOLE_INFO("Layout lock feature supported.\n");
 		sbi->ll_flags |= LL_SBI_LAYOUT_LOCK;
+	}
+
+	if (data->ocd_ibits_known & MDS_INODELOCK_XATTR) {
+		if (!(data->ocd_connect_flags & OBD_CONNECT_MAX_EASIZE)) {
+			LCONSOLE_INFO(
+				"%s: disabling xattr cache due to unknown maximum xattr size.\n",
+				dt);
+		} else {
+			sbi->ll_flags |= LL_SBI_XATTR_CACHE;
+			sbi->ll_xattr_cache_enabled = 1;
+		}
 	}
 
 	obd = class_name2obd(dt);
@@ -566,10 +577,6 @@ static int client_common_fill_super(struct super_block *sb, char *md, char *dt,
 		GOTO(out_root, err = -ENOMEM);
 	}
 
-	/* kernel >= 2.6.38 store dentry operations in sb->s_d_op. */
-	d_set_d_op(sb->s_root, &ll_d_root_ops);
-	sb->s_d_op = &ll_d_ops;
-
 	sbi->ll_sdev_orig = sb->s_dev;
 
 	/* We set sb->s_dev equal on all lustre clients in order to support
@@ -710,7 +717,7 @@ void ll_kill_super(struct super_block *sb)
 		return;
 
 	sbi = ll_s2sbi(sb);
-	/* we need restore s_dev from changed for clustred NFS before put_super
+	/* we need to restore s_dev from changed for clustered NFS before put_super
 	 * because new kernels have cached s_dev and change sb->s_dev in
 	 * put_super not affected real removing devices */
 	if (sbi) {
@@ -727,7 +734,8 @@ char *ll_read_opt(const char *opt, char *data)
 	CDEBUG(D_SUPER, "option: %s, data %s\n", opt, data);
 	if (strncmp(opt, data, strlen(opt)))
 		return NULL;
-	if ((value = strchr(data, '=')) == NULL)
+	value = strchr(data, '=');
+	if (value == NULL)
 		return NULL;
 
 	value++;
@@ -922,6 +930,9 @@ void ll_lli_init(struct ll_inode_info *lli)
 	lli->lli_layout_gen = LL_LAYOUT_GEN_NONE;
 	lli->lli_clob = NULL;
 
+	init_rwsem(&lli->lli_xattrs_list_rwsem);
+	mutex_init(&lli->lli_xattrs_enq_lock);
+
 	LASSERT(lli->lli_vfs_inode.i_mode != 0);
 	if (S_ISDIR(lli->lli_vfs_inode.i_mode)) {
 		mutex_init(&lli->lli_readdir_mutex);
@@ -997,6 +1008,8 @@ int ll_fill_super(struct super_block *sb, struct vfsmount *mnt)
 		GOTO(out_free, err);
 
 	sb->s_bdi = &lsi->lsi_bdi;
+	/* kernel >= 2.6.38 store dentry operations in sb->s_d_op. */
+	sb->s_d_op = &ll_d_ops;
 
 	/* Generate a string unique to this super, in case some joker tries
 	   to mount the same fs at two mount points.
@@ -1051,7 +1064,7 @@ out_free:
 
 void ll_put_super(struct super_block *sb)
 {
-	struct config_llog_instance cfg;
+	struct config_llog_instance cfg, params_cfg;
 	struct obd_device *obd;
 	struct lustre_sb_info *lsi = s2lsi(sb);
 	struct ll_sb_info *sbi = ll_s2sbi(sb);
@@ -1064,6 +1077,9 @@ void ll_put_super(struct super_block *sb)
 
 	cfg.cfg_instance = sb;
 	lustre_end_log(sb, profilenm, &cfg);
+
+	params_cfg.cfg_instance = sb;
+	lustre_end_log(sb, PARAMS_FILENAME, &params_cfg);
 
 	if (sbi->ll_md_exp) {
 		obd = class_exp2obd(sbi->ll_md_exp);
@@ -1193,6 +1209,8 @@ void ll_clear_inode(struct inode *inode)
 			 strlen(lli->lli_symlink_name) + 1);
 		lli->lli_symlink_name = NULL;
 	}
+
+	ll_xattr_cache_destroy(inode);
 
 	if (sbi->ll_flags & LL_SBI_RMT_CLIENT) {
 		LASSERT(lli->lli_posix_acl == NULL);
@@ -1346,19 +1364,24 @@ static int ll_setattr_ost(struct inode *inode, struct iattr *attr)
  * to the OST with the punch RPC, otherwise we do an explicit setattr RPC.
  * I don't believe it is possible to get e.g. ATTR_MTIME_SET and ATTR_SIZE
  * at the same time.
+ *
+ * In case of HSMimport, we only set attr on MDS.
  */
-int ll_setattr_raw(struct dentry *dentry, struct iattr *attr)
+int ll_setattr_raw(struct dentry *dentry, struct iattr *attr, bool hsm_import)
 {
 	struct inode *inode = dentry->d_inode;
 	struct ll_inode_info *lli = ll_i2info(inode);
 	struct md_op_data *op_data = NULL;
 	struct md_open_data *mod = NULL;
+	bool file_is_released = false;
 	int rc = 0, rc1 = 0;
 
-	CDEBUG(D_VFSTRACE, "%s: setattr inode %p/fid:"DFID" from %llu to %llu, "
-		"valid %x\n", ll_get_fsname(inode->i_sb, NULL, 0), inode,
+	CDEBUG(D_VFSTRACE,
+		"%s: setattr inode %p/fid:"DFID
+		" from %llu to %llu, valid %x, hsm_import %d\n",
+		ll_get_fsname(inode->i_sb, NULL, 0), inode,
 		PFID(&lli->lli_fid), i_size_read(inode), attr->ia_size,
-		attr->ia_valid);
+		attr->ia_valid, hsm_import);
 
 	if (attr->ia_valid & ATTR_SIZE) {
 		/* Check new size against VFS/VM file size limit and rlimit */
@@ -1382,7 +1405,7 @@ int ll_setattr_raw(struct dentry *dentry, struct iattr *attr)
 	/* POSIX: check before ATTR_*TIME_SET set (from inode_change_ok) */
 	if (attr->ia_valid & TIMES_SET_FLAGS) {
 		if ((!uid_eq(current_fsuid(), inode->i_uid)) &&
-		    !cfs_capable(CFS_CAP_FOWNER))
+		    !capable(CFS_CAP_FOWNER))
 			return -EPERM;
 	}
 
@@ -1436,9 +1459,39 @@ int ll_setattr_raw(struct dentry *dentry, struct iattr *attr)
 	    (attr->ia_valid & (ATTR_SIZE | ATTR_MTIME | ATTR_MTIME_SET)))
 		op_data->op_flags = MF_EPOCH_OPEN;
 
+	/* truncate on a released file must failed with -ENODATA,
+	 * so size must not be set on MDS for released file
+	 * but other attributes must be set
+	 */
+	if (S_ISREG(inode->i_mode)) {
+		struct lov_stripe_md *lsm;
+		__u32 gen;
+
+		ll_layout_refresh(inode, &gen);
+		lsm = ccc_inode_lsm_get(inode);
+		if (lsm && lsm->lsm_pattern & LOV_PATTERN_F_RELEASED)
+			file_is_released = true;
+		ccc_inode_lsm_put(inode, lsm);
+	}
+
+	/* if not in HSM import mode, clear size attr for released file
+	 * we clear the attribute send to MDT in op_data, not the original
+	 * received from caller in attr which is used later to
+	 * decide return code */
+	if (file_is_released && (attr->ia_valid & ATTR_SIZE) && !hsm_import)
+		op_data->op_attr.ia_valid &= ~ATTR_SIZE;
+
 	rc = ll_md_setattr(dentry, op_data, &mod);
 	if (rc)
 		GOTO(out, rc);
+
+	/* truncate failed (only when non HSM import), others succeed */
+	if (file_is_released) {
+		if ((attr->ia_valid & ATTR_SIZE) && !hsm_import)
+			GOTO(out, rc = -ENODATA);
+		else
+			GOTO(out, rc = 0);
+	}
 
 	/* RPC to MDT is sent, cancel data modification flag */
 	if (rc == 0 && (op_data->op_bias & MDS_DATA_MODIFIED)) {
@@ -1473,7 +1526,7 @@ out:
 	if (!S_ISDIR(inode->i_mode)) {
 		up_write(&lli->lli_trunc_sem);
 		mutex_lock(&inode->i_mutex);
-		if (attr->ia_valid & ATTR_SIZE)
+		if ((attr->ia_valid & ATTR_SIZE) && !hsm_import)
 			inode_dio_wait(inode);
 	}
 
@@ -1508,7 +1561,7 @@ int ll_setattr(struct dentry *de, struct iattr *attr)
 	    !(attr->ia_valid & ATTR_KILL_SGID))
 		attr->ia_valid |= ATTR_KILL_SGID;
 
-	return ll_setattr_raw(de, attr);
+	return ll_setattr_raw(de, attr, false);
 }
 
 int ll_statfs_internal(struct super_block *sb, struct obd_statfs *osfs,
@@ -1721,7 +1774,9 @@ void ll_update_inode(struct inode *inode, struct lustre_md *md)
 			 * lock on the client and set LLIF_MDS_SIZE_LOCK holding
 			 * it. */
 			mode = ll_take_md_lock(inode, MDS_INODELOCK_UPDATE,
-					       &lockh, LDLM_FL_CBPENDING);
+					       &lockh, LDLM_FL_CBPENDING,
+					       LCK_CR | LCK_CW |
+					       LCK_PR | LCK_PW);
 			if (mode) {
 				if (lli->lli_flags & (LLIF_DONE_WRITING |
 						      LLIF_EPOCH_PENDING |
@@ -1760,6 +1815,11 @@ void ll_update_inode(struct inode *inode, struct lustre_md *md)
 	if (body->valid & OBD_MD_FLOSSCAPA) {
 		LASSERT(md->oss_capa);
 		ll_add_capa(inode, md->oss_capa);
+	}
+
+	if (body->valid & OBD_MD_TSTATE) {
+		if (body->t_state & MS_RESTORE)
+			lli->lli_flags |= LLIF_FILE_RESTORING;
 	}
 }
 
@@ -1817,7 +1877,7 @@ void ll_delete_inode(struct inode *inode)
 		cl_sync_file_range(inode, 0, OBD_OBJECT_EOF,
 				   CL_FSYNC_DISCARD, 1);
 
-	truncate_inode_pages(&inode->i_data, 0);
+	truncate_inode_pages_final(&inode->i_data);
 
 	/* Workaround for LU-118 */
 	if (inode->i_data.nrpages) {

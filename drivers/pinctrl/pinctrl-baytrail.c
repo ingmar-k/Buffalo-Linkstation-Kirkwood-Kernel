@@ -29,7 +29,6 @@
 #include <linux/gpio.h>
 #include <linux/irqdomain.h>
 #include <linux/acpi.h>
-#include <linux/acpi_gpio.h>
 #include <linux/platform_device.h>
 #include <linux/seq_file.h>
 #include <linux/io.h>
@@ -60,6 +59,10 @@
 #define BYT_NGPIO_SCORE		102
 #define BYT_NGPIO_NCORE		28
 #define BYT_NGPIO_SUS		44
+
+#define BYT_SCORE_ACPI_UID	"1"
+#define BYT_NCORE_ACPI_UID	"2"
+#define BYT_SUS_ACPI_UID	"3"
 
 /*
  * Baytrail gpio controller consist of three separate sub-controllers called
@@ -103,17 +106,17 @@ static unsigned const sus_pins[BYT_NGPIO_SUS] = {
 
 static struct pinctrl_gpio_range byt_ranges[] = {
 	{
-		.name = "1", /* match with acpi _UID in probe */
+		.name = BYT_SCORE_ACPI_UID, /* match with acpi _UID in probe */
 		.npins = BYT_NGPIO_SCORE,
 		.pins = score_pins,
 	},
 	{
-		.name = "2",
+		.name = BYT_NCORE_ACPI_UID,
 		.npins = BYT_NGPIO_NCORE,
 		.pins = ncore_pins,
 	},
 	{
-		.name = "3",
+		.name = BYT_SUS_ACPI_UID,
 		.npins = BYT_NGPIO_SUS,
 		.pins = sus_pins,
 	},
@@ -146,9 +149,41 @@ static void __iomem *byt_gpio_reg(struct gpio_chip *chip, unsigned offset,
 	return vg->reg_base + reg_offset + reg;
 }
 
+static bool is_special_pin(struct byt_gpio *vg, unsigned offset)
+{
+	/* SCORE pin 92-93 */
+	if (!strcmp(vg->range->name, BYT_SCORE_ACPI_UID) &&
+		offset >= 92 && offset <= 93)
+		return true;
+
+	/* SUS pin 11-21 */
+	if (!strcmp(vg->range->name, BYT_SUS_ACPI_UID) &&
+		offset >= 11 && offset <= 21)
+		return true;
+
+	return false;
+}
+
 static int byt_gpio_request(struct gpio_chip *chip, unsigned offset)
 {
 	struct byt_gpio *vg = to_byt_gpio(chip);
+	void __iomem *reg = byt_gpio_reg(chip, offset, BYT_CONF0_REG);
+	u32 value;
+	bool special;
+
+	/*
+	 * In most cases, func pin mux 000 means GPIO function.
+	 * But, some pins may have func pin mux 001 represents
+	 * GPIO function. Only allow user to export pin with
+	 * func pin mux preset as GPIO function by BIOS/FW.
+	 */
+	value = readl(reg) & BYT_PIN_MUX;
+	special = is_special_pin(vg, offset);
+	if ((special && value != 1) || (!special && value)) {
+		dev_err(&vg->pdev->dev,
+			"pin %u cannot be used as GPIO.\n", offset);
+		return -EINVAL;
+	}
 
 	pm_runtime_get(&vg->pdev->dev);
 
@@ -286,13 +321,19 @@ static void byt_gpio_dbg_show(struct seq_file *s, struct gpio_chip *chip)
 	spin_lock_irqsave(&vg->lock, flags);
 
 	for (i = 0; i < vg->chip.ngpio; i++) {
+		const char *label;
 		offs = vg->range->pins[i] * 16;
 		conf0 = readl(vg->reg_base + offs + BYT_CONF0_REG);
 		val = readl(vg->reg_base + offs + BYT_VAL_REG);
 
+		label = gpiochip_is_requested(chip, i);
+		if (!label)
+			label = "Unrequested";
+
 		seq_printf(s,
-			   " gpio-%-3d %s %s %s pad-%-3d offset:0x%03x mux:%d %s%s%s\n",
+			   " gpio-%-3d (%-20.20s) %s %s %s pad-%-3d offset:0x%03x mux:%d %s%s%s\n",
 			   i,
+			   label,
 			   val & BYT_INPUT_EN ? "  " : "in",
 			   val & BYT_OUTPUT_EN ? "   " : "out",
 			   val & BYT_LEVEL ? "hi" : "lo",
@@ -366,11 +407,33 @@ static void byt_irq_mask(struct irq_data *d)
 {
 }
 
+static int byt_irq_reqres(struct irq_data *d)
+{
+	struct byt_gpio *vg = irq_data_get_irq_chip_data(d);
+
+	if (gpio_lock_as_irq(&vg->chip, irqd_to_hwirq(d))) {
+		dev_err(vg->chip.dev,
+			"unable to lock HW IRQ %lu for IRQ\n",
+			irqd_to_hwirq(d));
+		return -EINVAL;
+	}
+	return 0;
+}
+
+static void byt_irq_relres(struct irq_data *d)
+{
+	struct byt_gpio *vg = irq_data_get_irq_chip_data(d);
+
+	gpio_unlock_as_irq(&vg->chip, irqd_to_hwirq(d));
+}
+
 static struct irq_chip byt_irqchip = {
 	.name = "BYT-GPIO",
 	.irq_mask = byt_irq_mask,
 	.irq_unmask = byt_irq_unmask,
 	.irq_set_type = byt_irq_type,
+	.irq_request_resources = byt_irq_reqres,
+	.irq_release_resources = byt_irq_relres,
 };
 
 static void byt_gpio_irq_init_hw(struct byt_gpio *vg)
@@ -461,7 +524,7 @@ static int byt_gpio_probe(struct platform_device *pdev)
 	gc->set = byt_gpio_set;
 	gc->dbg_show = byt_gpio_dbg_show;
 	gc->base = -1;
-	gc->can_sleep = 0;
+	gc->can_sleep = false;
 	gc->dev = dev;
 
 	ret = gpiochip_add(gc);
@@ -485,9 +548,6 @@ static int byt_gpio_probe(struct platform_device *pdev)
 
 		irq_set_handler_data(hwirq, vg);
 		irq_set_chained_handler(hwirq, byt_gpio_irq_handler);
-
-		/* Register interrupt handlers for gpio signaled acpi events */
-		acpi_gpiochip_request_interrupts(gc);
 	}
 
 	pm_runtime_enable(dev);

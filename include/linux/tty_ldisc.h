@@ -84,7 +84,8 @@
  *	processing.  <cp> is a pointer to the buffer of input
  *	character received by the device.  <fp> is a pointer to a
  *	pointer of flag bytes which indicate whether a character was
- *	received with a parity error, etc.
+ *	received with a parity error, etc. <fp> may be NULL to indicate
+ *	all data received is TTY_NORMAL.
  *
  * void	(*write_wakeup)(struct tty_struct *);
  *
@@ -118,12 +119,12 @@
  *	processing.  <cp> is a pointer to the buffer of input
  *	character received by the device.  <fp> is a pointer to a
  *	pointer of flag bytes which indicate whether a character was
- *	received with a parity error, etc.
+ *	received with a parity error, etc. <fp> may be NULL to indicate
+ *	all data received is TTY_NORMAL.
  *	If assigned, prefer this function for automatic flow control.
  */
 
 #include <linux/fs.h>
-#include <linux/wait.h>
 #include <linux/wait.h>
 
 

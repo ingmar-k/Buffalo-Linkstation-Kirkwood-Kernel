@@ -11,11 +11,9 @@
 #define CAN_SKB_H
 
 #include <linux/types.h>
-#include <linux/can.h>
-#ifndef __GENKSYMS__
 #include <linux/skbuff.h>
+#include <linux/can.h>
 #include <net/sock.h>
-#endif
 
 /*
  * The struct can_skb_priv is used to transport additional information along

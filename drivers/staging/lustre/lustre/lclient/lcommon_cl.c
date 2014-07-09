@@ -79,27 +79,27 @@ static struct lu_kmem_descr ccc_caches[] = {
 	{
 		.ckd_cache = &ccc_lock_kmem,
 		.ckd_name  = "ccc_lock_kmem",
-		.ckd_size  = sizeof (struct ccc_lock)
+		.ckd_size  = sizeof(struct ccc_lock)
 	},
 	{
 		.ckd_cache = &ccc_object_kmem,
 		.ckd_name  = "ccc_object_kmem",
-		.ckd_size  = sizeof (struct ccc_object)
+		.ckd_size  = sizeof(struct ccc_object)
 	},
 	{
 		.ckd_cache = &ccc_thread_kmem,
 		.ckd_name  = "ccc_thread_kmem",
-		.ckd_size  = sizeof (struct ccc_thread_info),
+		.ckd_size  = sizeof(struct ccc_thread_info),
 	},
 	{
 		.ckd_cache = &ccc_session_kmem,
 		.ckd_name  = "ccc_session_kmem",
-		.ckd_size  = sizeof (struct ccc_session)
+		.ckd_size  = sizeof(struct ccc_session)
 	},
 	{
 		.ckd_cache = &ccc_req_kmem,
 		.ckd_name  = "ccc_req_kmem",
-		.ckd_size  = sizeof (struct ccc_req)
+		.ckd_size  = sizeof(struct ccc_req)
 	},
 	{
 		.ckd_cache = NULL
@@ -162,7 +162,7 @@ struct lu_context_key ccc_session_key = {
 
 
 /* type constructor/destructor: ccc_type_{init,fini,start,stop}(). */
-// LU_TYPE_INIT_FINI(ccc, &ccc_key, &ccc_session_key);
+/* LU_TYPE_INIT_FINI(ccc, &ccc_key, &ccc_session_key); */
 
 int ccc_device_init(const struct lu_env *env, struct lu_device *d,
 			   const char *name, struct lu_device *next)
@@ -1006,6 +1006,12 @@ again:
 	cl_io_fini(env, io);
 	if (unlikely(io->ci_need_restart))
 		goto again;
+	/* HSM import case: file is released, cannot be restored
+	 * no need to fail except if restore registration failed
+	 * with -ENODATA */
+	if (result == -ENODATA && io->ci_restore_needed &&
+	    io->ci_result != -ENODATA)
+		result = 0;
 	cl_env_put(env, &refcheck);
 	return result;
 }
@@ -1190,14 +1196,14 @@ static void cl_object_put_last(struct lu_env *env, struct cl_object *obj)
 
 		bkt = lu_site_bkt_from_fid(site, &header->loh_fid);
 
-		init_waitqueue_entry_current(&waiter);
+		init_waitqueue_entry(&waiter, current);
 		add_wait_queue(&bkt->lsb_marche_funebre, &waiter);
 
 		while (1) {
 			set_current_state(TASK_UNINTERRUPTIBLE);
 			if (atomic_read(&header->loh_ref) == 1)
 				break;
-			waitq_wait(&waiter, TASK_UNINTERRUPTIBLE);
+			schedule();
 		}
 
 		set_current_state(TASK_RUNNING);

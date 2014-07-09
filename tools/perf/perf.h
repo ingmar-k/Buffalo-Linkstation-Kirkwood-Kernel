@@ -12,6 +12,9 @@
 #ifndef __NR_perf_event_open
 # define __NR_perf_event_open 336
 #endif
+#ifndef __NR_futex
+# define __NR_futex 240
+#endif
 #endif
 
 #if defined(__x86_64__)
@@ -22,6 +25,9 @@
 #define CPUINFO_PROC	"model name"
 #ifndef __NR_perf_event_open
 # define __NR_perf_event_open 298
+#endif
+#ifndef __NR_futex
+# define __NR_futex 202
 #endif
 #endif
 
@@ -100,8 +106,8 @@
 
 #ifdef __aarch64__
 #define mb()		asm volatile("dmb ish" ::: "memory")
-#define wmb()		asm volatile("dmb ishld" ::: "memory")
-#define rmb()		asm volatile("dmb ishst" ::: "memory")
+#define wmb()		asm volatile("dmb ishst" ::: "memory")
+#define rmb()		asm volatile("dmb ishld" ::: "memory")
 #define cpu_relax()	asm volatile("yield" ::: "memory")
 #endif
 
@@ -130,6 +136,21 @@
 #define wmb()		asm volatile("" ::: "memory")
 #define rmb()		asm volatile("" ::: "memory")
 #define CPUINFO_PROC	"CPU"
+#endif
+
+#ifdef __xtensa__
+#define mb()		asm volatile("memw" ::: "memory")
+#define wmb()		asm volatile("memw" ::: "memory")
+#define rmb()		asm volatile("" ::: "memory")
+#define CPUINFO_PROC	"core ID"
+#endif
+
+#ifdef __tile__
+#define mb()		asm volatile ("mf" ::: "memory")
+#define wmb()		asm volatile ("mf" ::: "memory")
+#define rmb()		asm volatile ("mf" ::: "memory")
+#define cpu_relax()	asm volatile ("mfspr zero, PASS" ::: "memory")
+#define CPUINFO_PROC    "model name"
 #endif
 
 #define barrier() asm volatile ("" ::: "memory")
@@ -244,16 +265,19 @@ void pthread__unblock_sigwinch(void);
 enum perf_call_graph_mode {
 	CALLCHAIN_NONE,
 	CALLCHAIN_FP,
-	CALLCHAIN_DWARF
+	CALLCHAIN_DWARF,
+	CALLCHAIN_MAX
 };
 
-struct perf_record_opts {
+struct record_opts {
 	struct target target;
 	int	     call_graph;
+	bool         call_graph_enabled;
 	bool	     group;
 	bool	     inherit_stat;
-	bool	     no_delay;
+	bool	     no_buffering;
 	bool	     no_inherit;
+	bool	     no_inherit_set;
 	bool	     no_samples;
 	bool	     raw_samples;
 	bool	     sample_address;
@@ -268,6 +292,7 @@ struct perf_record_opts {
 	u64	     user_interval;
 	u16	     stack_dump_size;
 	bool	     sample_transaction;
+	unsigned     initial_delay;
 };
 
 #endif

@@ -24,7 +24,7 @@ static VOID PruneQueue(struct bcm_mini_adapter *Adapter, INT iIndex);
 *
 * Returns     - TRUE(If address matches) else FAIL .
 *********************************************************************/
-bool MatchSrcIpAddress(struct bcm_classifier_rule *pstClassifierRule, ULONG ulSrcIP)
+static bool MatchSrcIpAddress(struct bcm_classifier_rule *pstClassifierRule, ULONG ulSrcIP)
 {
 	UCHAR ucLoopIndex = 0;
 
@@ -58,7 +58,7 @@ bool MatchSrcIpAddress(struct bcm_classifier_rule *pstClassifierRule, ULONG ulSr
 *
 * Returns     - TRUE(If address matches) else FAIL .
 *********************************************************************/
-bool MatchDestIpAddress(struct bcm_classifier_rule *pstClassifierRule, ULONG ulDestIP)
+static bool MatchDestIpAddress(struct bcm_classifier_rule *pstClassifierRule, ULONG ulDestIP)
 {
 	UCHAR ucLoopIndex = 0;
 	struct bcm_mini_adapter *Adapter = GET_BCM_ADAPTER(gblpnetdev);
@@ -91,7 +91,7 @@ bool MatchDestIpAddress(struct bcm_classifier_rule *pstClassifierRule, ULONG ulD
 *
 * Returns     - TRUE(If address matches) else FAIL.
 **************************************************************************/
-bool MatchTos(struct bcm_classifier_rule *pstClassifierRule, UCHAR ucTypeOfService)
+static bool MatchTos(struct bcm_classifier_rule *pstClassifierRule, UCHAR ucTypeOfService)
 {
 
 	struct bcm_mini_adapter *Adapter = GET_BCM_ADAPTER(gblpnetdev);
@@ -222,10 +222,7 @@ static USHORT	IpVersion4(struct bcm_mini_adapter *Adapter,
 
 		//Checking classifier validity
 		if (!pstClassifierRule->bUsed || pstClassifierRule->ucDirection == DOWNLINK_DIR)
-		{
-			bClassificationSucceed = false;
 			break;
-		}
 
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_TX, IPV4_DBG, DBG_LVL_ALL, "is IPv6 check!");
 		if (pstClassifierRule->bIpv6Protocol)
@@ -233,51 +230,47 @@ static USHORT	IpVersion4(struct bcm_mini_adapter *Adapter,
 
 		//**************Checking IP header parameter**************************//
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_TX, IPV4_DBG, DBG_LVL_ALL, "Trying to match Source IP Address");
-		if (false == (bClassificationSucceed =
-			MatchSrcIpAddress(pstClassifierRule, iphd->saddr)))
+		if (!MatchSrcIpAddress(pstClassifierRule, iphd->saddr))
 			break;
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_TX, IPV4_DBG, DBG_LVL_ALL, "Source IP Address Matched");
 
-		if (false == (bClassificationSucceed =
-			MatchDestIpAddress(pstClassifierRule, iphd->daddr)))
+		if (!MatchDestIpAddress(pstClassifierRule, iphd->daddr))
 			break;
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_TX, IPV4_DBG, DBG_LVL_ALL, "Destination IP Address Matched");
 
-		if (false == (bClassificationSucceed =
-			MatchTos(pstClassifierRule, iphd->tos)))
-		{
+		if (!MatchTos(pstClassifierRule, iphd->tos)) {
 			BCM_DEBUG_PRINT(Adapter, DBG_TYPE_TX, IPV4_DBG, DBG_LVL_ALL, "TOS Match failed\n");
 			break;
 		}
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_TX, IPV4_DBG, DBG_LVL_ALL, "TOS Matched");
 
-		if (false == (bClassificationSucceed =
-			MatchProtocol(pstClassifierRule, iphd->protocol)))
+		if (!MatchProtocol(pstClassifierRule, iphd->protocol))
 			break;
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_TX, IPV4_DBG, DBG_LVL_ALL, "Protocol Matched");
 
 		//if protocol is not TCP or UDP then no need of comparing source port and destination port
-		if (iphd->protocol != TCP && iphd->protocol != UDP)
+		if (iphd->protocol != TCP && iphd->protocol != UDP) {
+			bClassificationSucceed = TRUE;
 			break;
+		}
 		//******************Checking Transport Layer Header field if present *****************//
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_TX, IPV4_DBG, DBG_LVL_ALL, "Source Port %04x",
 			(iphd->protocol == UDP) ? xprt_hdr->uhdr.source : xprt_hdr->thdr.source);
 
-		if (false == (bClassificationSucceed =
-			MatchSrcPort(pstClassifierRule,
-				ntohs((iphd->protocol == UDP) ?
-				xprt_hdr->uhdr.source : xprt_hdr->thdr.source))))
+		if (!MatchSrcPort(pstClassifierRule,
+				  ntohs((iphd->protocol == UDP) ?
+				  xprt_hdr->uhdr.source : xprt_hdr->thdr.source)))
 			break;
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_TX, IPV4_DBG, DBG_LVL_ALL, "Src Port Matched");
 
 		BCM_DEBUG_PRINT(Adapter, DBG_TYPE_TX, IPV4_DBG, DBG_LVL_ALL, "Destination Port %04x",
 			(iphd->protocol == UDP) ? xprt_hdr->uhdr.dest :
 			xprt_hdr->thdr.dest);
-		if (false == (bClassificationSucceed =
-			MatchDestPort(pstClassifierRule,
-			ntohs((iphd->protocol == UDP) ?
-			xprt_hdr->uhdr.dest : xprt_hdr->thdr.dest))))
+		if (!MatchDestPort(pstClassifierRule,
+				   ntohs((iphd->protocol == UDP) ?
+				   xprt_hdr->uhdr.dest : xprt_hdr->thdr.dest)))
 			break;
+		bClassificationSucceed = TRUE;
 	} while (0);
 
 	if (TRUE == bClassificationSucceed)

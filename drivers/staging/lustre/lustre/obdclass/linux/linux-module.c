@@ -56,7 +56,6 @@
 #include <linux/proc_fs.h>
 #include <linux/fs.h>
 #include <linux/poll.h>
-#include <linux/init.h>
 #include <linux/list.h>
 #include <linux/highmem.h>
 #include <asm/io.h>
@@ -185,7 +184,7 @@ static long obd_class_ioctl(struct file *filp, unsigned int cmd,
 	int err = 0;
 
 	/* Allow non-root access for OBD_IOC_PING_TARGET - used by lfs check */
-	if (!cfs_capable(CFS_CAP_SYS_ADMIN) && (cmd != OBD_IOC_PING_TARGET))
+	if (!capable(CFS_CAP_SYS_ADMIN) && (cmd != OBD_IOC_PING_TARGET))
 		return err = -EACCES;
 	if ((cmd & 0xffffff00) == ((int)'T') << 8) /* ignore all tty ioctls */
 		return err = -ENOTTY;
@@ -295,9 +294,6 @@ struct lprocfs_vars lprocfs_base[] = {
 	{ "jobid_var", &obd_proc_jobid_var_fops },
 	{ 0 }
 };
-#else
-#define lprocfs_base NULL
-#endif /* LPROCFS */
 
 static void *obd_device_list_seq_start(struct seq_file *p, loff_t *pos)
 {
@@ -380,7 +376,6 @@ int class_procfs_init(void)
 {
 	int rc = 0;
 
-	obd_sysctl_init();
 	proc_lustre_root = lprocfs_register("fs/lustre", NULL,
 					    lprocfs_base, NULL);
 	if (IS_ERR(proc_lustre_root)) {
@@ -404,3 +399,4 @@ int class_procfs_clean(void)
 	}
 	return 0;
 }
+#endif /* LPROCFS */

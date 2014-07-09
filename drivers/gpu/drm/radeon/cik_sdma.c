@@ -52,6 +52,75 @@ u32 cik_gpu_check_soft_reset(struct radeon_device *rdev);
  */
 
 /**
+ * cik_sdma_get_rptr - get the current read pointer
+ *
+ * @rdev: radeon_device pointer
+ * @ring: radeon ring pointer
+ *
+ * Get the current rptr from the hardware (CIK+).
+ */
+uint32_t cik_sdma_get_rptr(struct radeon_device *rdev,
+			   struct radeon_ring *ring)
+{
+	u32 rptr, reg;
+
+	if (rdev->wb.enabled) {
+		rptr = rdev->wb.wb[ring->rptr_offs/4];
+	} else {
+		if (ring->idx == R600_RING_TYPE_DMA_INDEX)
+			reg = SDMA0_GFX_RB_RPTR + SDMA0_REGISTER_OFFSET;
+		else
+			reg = SDMA0_GFX_RB_RPTR + SDMA1_REGISTER_OFFSET;
+
+		rptr = RREG32(reg);
+	}
+
+	return (rptr & 0x3fffc) >> 2;
+}
+
+/**
+ * cik_sdma_get_wptr - get the current write pointer
+ *
+ * @rdev: radeon_device pointer
+ * @ring: radeon ring pointer
+ *
+ * Get the current wptr from the hardware (CIK+).
+ */
+uint32_t cik_sdma_get_wptr(struct radeon_device *rdev,
+			   struct radeon_ring *ring)
+{
+	u32 reg;
+
+	if (ring->idx == R600_RING_TYPE_DMA_INDEX)
+		reg = SDMA0_GFX_RB_WPTR + SDMA0_REGISTER_OFFSET;
+	else
+		reg = SDMA0_GFX_RB_WPTR + SDMA1_REGISTER_OFFSET;
+
+	return (RREG32(reg) & 0x3fffc) >> 2;
+}
+
+/**
+ * cik_sdma_set_wptr - commit the write pointer
+ *
+ * @rdev: radeon_device pointer
+ * @ring: radeon ring pointer
+ *
+ * Write the wptr back to the hardware (CIK+).
+ */
+void cik_sdma_set_wptr(struct radeon_device *rdev,
+		       struct radeon_ring *ring)
+{
+	u32 reg;
+
+	if (ring->idx == R600_RING_TYPE_DMA_INDEX)
+		reg = SDMA0_GFX_RB_WPTR + SDMA0_REGISTER_OFFSET;
+	else
+		reg = SDMA0_GFX_RB_WPTR + SDMA1_REGISTER_OFFSET;
+
+	WREG32(reg, (ring->wptr << 2) & 0x3fffc);
+}
+
+/**
  * cik_sdma_ring_ib_execute - Schedule an IB on the DMA engine
  *
  * @rdev: radeon_device pointer
@@ -181,7 +250,9 @@ static void cik_sdma_gfx_stop(struct radeon_device *rdev)
 	u32 rb_cntl, reg_offset;
 	int i;
 
-	radeon_ttm_set_active_vram_size(rdev, rdev->mc.visible_vram_size);
+	if ((rdev->asic->copy.copy_ring_index == R600_RING_TYPE_DMA_INDEX) ||
+	    (rdev->asic->copy.copy_ring_index == CAYMAN_RING_TYPE_DMA1_INDEX))
+		radeon_ttm_set_active_vram_size(rdev, rdev->mc.visible_vram_size);
 
 	for (i = 0; i < 2; i++) {
 		if (i == 0)
@@ -298,8 +369,6 @@ static int cik_sdma_gfx_resume(struct radeon_device *rdev)
 		ring->wptr = 0;
 		WREG32(SDMA0_GFX_RB_WPTR + reg_offset, ring->wptr << 2);
 
-		ring->rptr = RREG32(SDMA0_GFX_RB_RPTR + reg_offset) >> 2;
-
 		/* enable DMA RB */
 		WREG32(SDMA0_GFX_RB_CNTL + reg_offset, rb_cntl | SDMA_RB_ENABLE);
 
@@ -319,7 +388,9 @@ static int cik_sdma_gfx_resume(struct radeon_device *rdev)
 		}
 	}
 
-	radeon_ttm_set_active_vram_size(rdev, rdev->mc.real_vram_size);
+	if ((rdev->asic->copy.copy_ring_index == R600_RING_TYPE_DMA_INDEX) ||
+	    (rdev->asic->copy.copy_ring_index == CAYMAN_RING_TYPE_DMA1_INDEX))
+		radeon_ttm_set_active_vram_size(rdev, rdev->mc.real_vram_size);
 
 	return 0;
 }
@@ -491,6 +562,7 @@ int cik_copy_dma(struct radeon_device *rdev,
 	r = radeon_fence_emit(rdev, fence, ring->idx);
 	if (r) {
 		radeon_ring_unlock_undo(rdev, ring);
+		radeon_semaphore_free(rdev, &sem, NULL);
 		return r;
 	}
 
@@ -526,7 +598,7 @@ int cik_sdma_ring_test(struct radeon_device *rdev,
 	tmp = 0xCAFEDEAD;
 	writel(tmp, ptr);
 
-	r = radeon_ring_lock(rdev, ring, 4);
+	r = radeon_ring_lock(rdev, ring, 5);
 	if (r) {
 		DRM_ERROR("radeon: dma failed to lock ring %d (%d).\n", ring->idx, r);
 		return r;
@@ -640,11 +712,9 @@ bool cik_sdma_is_lockup(struct radeon_device *rdev, struct radeon_ring *ring)
 		mask = RADEON_RESET_DMA1;
 
 	if (!(reset_mask & mask)) {
-		radeon_ring_lockup_update(ring);
+		radeon_ring_lockup_update(rdev, ring);
 		return false;
 	}
-	/* force ring activities */
-	radeon_ring_force_activity(rdev, ring);
 	return radeon_ring_test_lockup(rdev, ring);
 }
 

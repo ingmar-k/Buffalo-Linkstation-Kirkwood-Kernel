@@ -64,20 +64,28 @@ int ipu_plane_set_base(struct ipu_plane *ipu_plane, struct drm_framebuffer *fb,
 {
 	struct ipu_ch_param __iomem *cpmem;
 	struct drm_gem_cma_object *cma_obj;
+	unsigned long eba;
 
 	cma_obj = drm_fb_cma_get_gem_obj(fb, 0);
 	if (!cma_obj) {
-		DRM_LOG_KMS("entry is null.\n");
+		DRM_DEBUG_KMS("entry is null.\n");
 		return -EFAULT;
 	}
 
-	dev_dbg(ipu_plane->base.dev->dev, "phys = 0x%x, x = %d, y = %d",
-		cma_obj->paddr, x, y);
+	dev_dbg(ipu_plane->base.dev->dev, "phys = %pad, x = %d, y = %d",
+		&cma_obj->paddr, x, y);
 
 	cpmem = ipu_get_cpmem(ipu_plane->ipu_ch);
 	ipu_cpmem_set_stride(cpmem, fb->pitches[0]);
-	ipu_cpmem_set_buffer(cpmem, 0, cma_obj->paddr + fb->offsets[0] +
-			     fb->pitches[0] * y + x);
+
+	eba = cma_obj->paddr + fb->offsets[0] +
+	      fb->pitches[0] * y + (fb->bits_per_pixel >> 3) * x;
+	ipu_cpmem_set_buffer(cpmem, 0, eba);
+	ipu_cpmem_set_buffer(cpmem, 1, eba);
+
+	/* cache offsets for subsequent pageflips */
+	ipu_plane->x = x;
+	ipu_plane->y = y;
 
 	return 0;
 }

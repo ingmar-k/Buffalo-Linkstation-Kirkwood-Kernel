@@ -63,11 +63,6 @@ static void Init_ODM_ComInfo_88E(struct adapter *Adapter)
 
 	ODM_CmnInfoInit(dm_odm, ODM_CMNINFO_PLATFORM, ODM_CE);
 
-	if (Adapter->interface_type == RTW_GSPI)
-		ODM_CmnInfoInit(dm_odm, ODM_CMNINFO_INTERFACE, ODM_ITRF_SDIO);
-	else
-		ODM_CmnInfoInit(dm_odm, ODM_CMNINFO_INTERFACE, Adapter->interface_type);/* RTL871X_HCI_TYPE */
-
 	ODM_CmnInfoInit(dm_odm, ODM_CMNINFO_IC_TYPE, ODM_RTL8188E);
 
 	fab_ver = ODM_TSMC;
@@ -165,7 +160,6 @@ void rtl8188e_HalDmWatchDog(struct adapter *Adapter)
 	u8 hw_init_completed = false;
 	struct hal_data_8188e *hal_data = GET_HAL_DATA(Adapter);
 
-	_func_enter_;
 	hw_init_completed = Adapter->hw_init_completed;
 
 	if (!hw_init_completed)
@@ -183,7 +177,6 @@ void rtl8188e_HalDmWatchDog(struct adapter *Adapter)
 		/*  Calculate Tx/Rx statistics. */
 		dm_CheckStatistics(Adapter);
 
-	_func_exit_;
 	}
 
 	/* ODM */

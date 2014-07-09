@@ -55,8 +55,7 @@ static void ath10k_send_suspend_complete(struct ath10k *ar)
 {
 	ath10k_dbg(ATH10K_DBG_BOOT, "boot suspend complete\n");
 
-	ar->is_target_paused = true;
-	wake_up(&ar->event_queue);
+	complete(&ar->target_suspend);
 }
 
 static int ath10k_init_connect_htc(struct ath10k *ar)
@@ -470,8 +469,12 @@ static int ath10k_core_fetch_firmware_api_n(struct ath10k *ar, const char *name)
 				if (index == ie_len)
 					break;
 
-				if (data[index] & (1 << bit))
+				if (data[index] & (1 << bit)) {
+					ath10k_dbg(ATH10K_DBG_BOOT,
+						   "Enabling feature bit: %i\n",
+						   i);
 					__set_bit(i, ar->fw_features);
+				}
 			}
 
 			ath10k_dbg_dump(ATH10K_DBG_BOOT, "features", "",
@@ -597,10 +600,8 @@ static int ath10k_init_uart(struct ath10k *ar)
 		return ret;
 	}
 
-	if (!uart_print) {
-		ath10k_info("UART prints disabled\n");
+	if (!uart_print)
 		return 0;
-	}
 
 	ret = ath10k_bmi_write32(ar, hi_dbg_uart_txpin, 7);
 	if (ret) {
@@ -645,8 +646,8 @@ static int ath10k_init_hw_params(struct ath10k *ar)
 
 	ar->hw_params = *hw_params;
 
-	ath10k_info("Hardware name %s version 0x%x\n",
-		    ar->hw_params.name, ar->target_version);
+	ath10k_dbg(ATH10K_DBG_BOOT, "Hardware name %s version 0x%x\n",
+		   ar->hw_params.name, ar->target_version);
 
 	return 0;
 }
@@ -664,7 +665,8 @@ static void ath10k_core_restart(struct work_struct *work)
 		ieee80211_restart_hw(ar->hw);
 		break;
 	case ATH10K_STATE_OFF:
-		/* this can happen if driver is being unloaded */
+		/* this can happen if driver is being unloaded
+		 * or if the crash happens during FW probing */
 		ath10k_warn("cannot restart a device that hasn't been started\n");
 		break;
 	case ATH10K_STATE_RESTARTING:
@@ -700,6 +702,7 @@ struct ath10k *ath10k_core_create(void *hif_priv, struct device *dev,
 	init_completion(&ar->scan.started);
 	init_completion(&ar->scan.completed);
 	init_completion(&ar->scan.on_channel);
+	init_completion(&ar->target_suspend);
 
 	init_completion(&ar->install_key_done);
 	init_completion(&ar->vdev_setup_done);
@@ -723,8 +726,6 @@ struct ath10k *ath10k_core_create(void *hif_priv, struct device *dev,
 	INIT_WORK(&ar->wmi_mgmt_tx_work, ath10k_mgmt_over_wmi_tx_work);
 	skb_queue_head_init(&ar->wmi_mgmt_tx_queue);
 
-	init_waitqueue_head(&ar->event_queue);
-
 	INIT_WORK(&ar->restart_work, ath10k_core_restart);
 
 	return ar;
@@ -737,8 +738,6 @@ EXPORT_SYMBOL(ath10k_core_create);
 
 void ath10k_core_destroy(struct ath10k *ar)
 {
-	ath10k_debug_destroy(ar);
-
 	flush_workqueue(ar->workqueue);
 	destroy_workqueue(ar->workqueue);
 
@@ -786,21 +785,30 @@ int ath10k_core_start(struct ath10k *ar)
 		goto err;
 	}
 
-	status = ath10k_htc_wait_target(&ar->htc);
-	if (status)
+	status = ath10k_hif_start(ar);
+	if (status) {
+		ath10k_err("could not start HIF: %d\n", status);
 		goto err_wmi_detach;
+	}
+
+	status = ath10k_htc_wait_target(&ar->htc);
+	if (status) {
+		ath10k_err("failed to connect to HTC: %d\n", status);
+		goto err_hif_stop;
+	}
 
 	status = ath10k_htt_attach(ar);
 	if (status) {
 		ath10k_err("could not attach htt (%d)\n", status);
-		goto err_wmi_detach;
+		goto err_hif_stop;
 	}
 
 	status = ath10k_init_connect_htc(ar);
 	if (status)
 		goto err_htt_detach;
 
-	ath10k_info("firmware %s booted\n", ar->hw->wiphy->fw_version);
+	ath10k_dbg(ATH10K_DBG_BOOT, "firmware %s booted\n",
+		   ar->hw->wiphy->fw_version);
 
 	status = ath10k_wmi_cmd_init(ar);
 	if (status) {
@@ -826,12 +834,23 @@ int ath10k_core_start(struct ath10k *ar)
 	ar->free_vdev_map = (1 << TARGET_NUM_VDEVS) - 1;
 	INIT_LIST_HEAD(&ar->arvifs);
 
+	if (!test_bit(ATH10K_FLAG_FIRST_BOOT_DONE, &ar->dev_flags))
+		ath10k_info("%s (0x%x) fw %s api %d htt %d.%d\n",
+			    ar->hw_params.name, ar->target_version,
+			    ar->hw->wiphy->fw_version, ar->fw_api,
+			    ar->htt.target_version_major,
+			    ar->htt.target_version_minor);
+
+	__set_bit(ATH10K_FLAG_FIRST_BOOT_DONE, &ar->dev_flags);
+
 	return 0;
 
 err_disconnect_htc:
 	ath10k_htc_stop(&ar->htc);
 err_htt_detach:
 	ath10k_htt_detach(&ar->htt);
+err_hif_stop:
+	ath10k_hif_stop(ar);
 err_wmi_detach:
 	ath10k_wmi_detach(ar);
 err:
@@ -839,10 +858,34 @@ err:
 }
 EXPORT_SYMBOL(ath10k_core_start);
 
+int ath10k_wait_for_suspend(struct ath10k *ar, u32 suspend_opt)
+{
+	int ret;
+
+	reinit_completion(&ar->target_suspend);
+
+	ret = ath10k_wmi_pdev_suspend_target(ar, suspend_opt);
+	if (ret) {
+		ath10k_warn("could not suspend target (%d)\n", ret);
+		return ret;
+	}
+
+	ret = wait_for_completion_timeout(&ar->target_suspend, 1 * HZ);
+
+	if (ret == 0) {
+		ath10k_warn("suspend timed out - target pause event never came\n");
+		return -ETIMEDOUT;
+	}
+
+	return 0;
+}
+
 void ath10k_core_stop(struct ath10k *ar)
 {
 	lockdep_assert_held(&ar->conf_mutex);
 
+	/* try to suspend target */
+	ath10k_wait_for_suspend(ar, WMI_PDEV_SUSPEND_AND_DISABLE_INTR);
 	ath10k_debug_stop(ar);
 	ath10k_htc_stop(&ar->htc);
 	ath10k_htt_detach(&ar->htt);
@@ -985,6 +1028,8 @@ void ath10k_core_unregister(struct ath10k *ar)
 	ath10k_mac_unregister(ar);
 
 	ath10k_core_free_firmware_files(ar);
+
+	ath10k_debug_destroy(ar);
 }
 EXPORT_SYMBOL(ath10k_core_unregister);
 

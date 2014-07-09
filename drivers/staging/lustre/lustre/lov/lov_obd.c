@@ -339,7 +339,7 @@ static int lov_disconnect(struct obd_export *exp)
 	for (i = 0; i < lov->desc.ld_tgt_count; i++) {
 		if (lov->lov_tgts[i] && lov->lov_tgts[i]->ltd_exp) {
 			/* Disconnection is the last we know about an obd */
-			lov_del_target(obd, i, 0, lov->lov_tgts[i]->ltd_gen);
+			lov_del_target(obd, i, NULL, lov->lov_tgts[i]->ltd_gen);
 		}
 	}
 	obd_putref(obd);
@@ -644,7 +644,7 @@ out:
 	if (rc) {
 		CERROR("add failed (%d), deleting %s\n", rc,
 		       obd_uuid2str(&tgt->ltd_uuid));
-		lov_del_target(obd, index, 0, 0);
+		lov_del_target(obd, index, NULL, 0);
 	}
 	obd_putref(obd);
 	return rc;
@@ -768,7 +768,7 @@ void lov_fix_desc(struct lov_desc *desc)
 
 int lov_setup(struct obd_device *obd, struct lustre_cfg *lcfg)
 {
-	struct lprocfs_static_vars lvars = { 0 };
+	struct lprocfs_static_vars lvars = { NULL };
 	struct lov_desc *desc;
 	struct lov_obd *lov = &obd->u.lov;
 	int rc;
@@ -1174,7 +1174,7 @@ static int lov_getattr_interpret(struct ptlrpc_request_set *rqset,
 	struct lov_request_set *lovset = (struct lov_request_set *)data;
 	int err;
 
-	/* don't do attribute merge if this aysnc op failed */
+	/* don't do attribute merge if this async op failed */
 	if (rc)
 		atomic_set(&lovset->set_completes, 0);
 	err = lov_fini_getattr_set(lovset);

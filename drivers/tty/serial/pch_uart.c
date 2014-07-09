@@ -1508,10 +1508,14 @@ static int pch_uart_verify_port(struct uart_port *port,
 			__func__);
 		return -EOPNOTSUPP;
 #endif
-		dev_info(priv->port.dev, "PCH UART : Use DMA Mode\n");
-		if (!priv->use_dma)
+		if (!priv->use_dma) {
 			pch_request_dma(port);
-		priv->use_dma = 1;
+			if (priv->chan_rx)
+				priv->use_dma = 1;
+		}
+		dev_info(priv->port.dev, "PCH UART: %s\n",
+				priv->use_dma ?
+				"Use DMA Mode" : "No DMA");
 	}
 
 	return 0;
@@ -1758,7 +1762,9 @@ static struct eg20t_port *pch_uart_init_port(struct pci_dev *pdev,
 	int fifosize;
 	int port_type;
 	struct pch_uart_driver_data *board;
+#ifdef CONFIG_DEBUG_FS
 	char name[32];	/* for debugfs file name */
+#endif
 
 	board = &drv_dat[id->driver_data];
 	port_type = board->port_type;
@@ -1853,7 +1859,6 @@ static void pch_uart_exit_port(struct eg20t_port *priv)
 		debugfs_remove(priv->debugfs);
 #endif
 	uart_remove_one_port(&pch_uart_driver, &priv->port);
-	pci_set_drvdata(priv->pdev, NULL);
 	free_page((unsigned long)priv->rxbuf.buf);
 }
 
@@ -1907,7 +1912,7 @@ static int pch_uart_pci_resume(struct pci_dev *pdev)
 #define pch_uart_pci_resume NULL
 #endif
 
-static DEFINE_PCI_DEVICE_TABLE(pch_uart_pci_id) = {
+static const struct pci_device_id pch_uart_pci_id[] = {
 	{PCI_DEVICE(PCI_VENDOR_ID_INTEL, 0x8811),
 	 .driver_data = pch_et20t_uart0},
 	{PCI_DEVICE(PCI_VENDOR_ID_INTEL, 0x8812),

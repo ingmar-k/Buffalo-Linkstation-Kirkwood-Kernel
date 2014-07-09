@@ -31,6 +31,7 @@
 #include <linux/crypto.h>
 #include <linux/cryptohash.h>
 #include <linux/kref.h>
+#include <linux/ktime.h>
 
 #include <net/inet_connection_sock.h>
 #include <net/inet_timewait_sock.h>
@@ -282,6 +283,7 @@ extern int sysctl_tcp_limit_output_bytes;
 extern int sysctl_tcp_challenge_ack_limit;
 extern unsigned int sysctl_tcp_notsent_lowat;
 extern int sysctl_tcp_min_tso_segs;
+extern int sysctl_tcp_autocorking;
 
 extern atomic_long_t tcp_memory_allocated;
 extern struct percpu_counter tcp_sockets_allocated;
@@ -467,7 +469,6 @@ struct sk_buff *tcp_make_synack(struct sock *sk, struct dst_entry *dst,
 				struct tcp_fastopen_cookie *foc);
 int tcp_disconnect(struct sock *sk, int flags);
 
-void tcp_connect_init(struct sock *sk);
 void tcp_finish_connect(struct sock *sk, struct sk_buff *skb);
 int tcp_send_rcvq(struct sock *sk, struct msghdr *msg, size_t size);
 void inet_sk_rx_dst_set(struct sock *sk, const struct sk_buff *skb);
@@ -478,22 +479,22 @@ int __cookie_v4_check(const struct iphdr *iph, const struct tcphdr *th,
 struct sock *cookie_v4_check(struct sock *sk, struct sk_buff *skb,
 			     struct ip_options *opt);
 #ifdef CONFIG_SYN_COOKIES
-#include <linux/ktime.h>
 
-/* Syncookies use a monotonic timer which increments every 64 seconds.
+/* Syncookies use a monotonic timer which increments every 60 seconds.
  * This counter is used both as a hash input and partially encoded into
  * the cookie value.  A cookie is only validated further if the delta
  * between the current counter value and the encoded one is less than this,
- * i.e. a sent cookie is valid only at most for 128 seconds (or less if
+ * i.e. a sent cookie is valid only at most for 2*60 seconds (or less if
  * the counter advances immediately after a cookie is generated).
  */
 #define MAX_SYNCOOKIE_AGE 2
 
 static inline u32 tcp_cookie_time(void)
 {
-	struct timespec now;
-	getnstimeofday(&now);
-	return now.tv_sec >> 6; /* 64 seconds granularity */
+	u64 val = get_jiffies_64();
+
+	do_div(val, 60 * HZ);
+	return val;
 }
 
 u32 __cookie_v4_init_sequence(const struct iphdr *iph, const struct tcphdr *th,
@@ -619,10 +620,8 @@ static inline void tcp_bound_rto(const struct sock *sk)
 
 static inline u32 __tcp_set_rto(const struct tcp_sock *tp)
 {
-	return (tp->srtt >> 3) + tp->rttvar;
+	return usecs_to_jiffies((tp->srtt_us >> 3) + tp->rttvar_us);
 }
-
-void tcp_set_rto(struct sock *sk);
 
 static inline void __tcp_fast_path_on(struct tcp_sock *tp, u32 snd_wnd)
 {
@@ -656,6 +655,11 @@ static inline u32 tcp_rto_min(struct sock *sk)
 	if (dst && dst_metric_locked(dst, RTAX_RTO_MIN))
 		rto_min = dst_metric_rtt(dst, RTAX_RTO_MIN);
 	return rto_min;
+}
+
+static inline u32 tcp_rto_min_us(struct sock *sk)
+{
+	return jiffies_to_usecs(tcp_rto_min(sk));
 }
 
 /* Compute the actual receive window we are currently advertising.
@@ -780,7 +784,6 @@ enum tcp_ca_event {
 #define TCP_CA_BUF_MAX	(TCP_CA_NAME_MAX*TCP_CA_MAX)
 
 #define TCP_CONG_NON_RESTRICTED 0x1
-#define TCP_CONG_RTT_STAMP	0x2
 
 struct tcp_congestion_ops {
 	struct list_head	list;
@@ -793,8 +796,6 @@ struct tcp_congestion_ops {
 
 	/* return slow start threshold (required) */
 	u32 (*ssthresh)(struct sock *sk);
-	/* lower bound for congestion window (optional) */
-	u32 (*min_cwnd)(const struct sock *sk);
 	/* do new cwnd calculation (required) */
 	void (*cong_avoid)(struct sock *sk, u32 ack, u32 acked, u32 in_flight);
 	/* call before changing ca_state (optional) */
@@ -829,7 +830,6 @@ void tcp_cong_avoid_ai(struct tcp_sock *tp, u32 w);
 extern struct tcp_congestion_ops tcp_init_congestion_ops;
 u32 tcp_reno_ssthresh(struct sock *sk);
 void tcp_reno_cong_avoid(struct sock *sk, u32 ack, u32 acked, u32 in_flight);
-u32 tcp_reno_min_cwnd(const struct sock *sk);
 extern struct tcp_congestion_ops tcp_reno;
 
 static inline void tcp_set_ca_state(struct sock *sk, const u8 ca_state)
@@ -976,13 +976,6 @@ static inline u32 tcp_wnd_end(const struct tcp_sock *tp)
 	return tp->snd_una + tp->snd_wnd;
 }
 bool tcp_is_cwnd_limited(const struct sock *sk, u32 in_flight);
-
-static inline void tcp_minshall_update(struct tcp_sock *tp, unsigned int mss,
-				       const struct sk_buff *skb)
-{
-	if (skb->len < mss)
-		tp->snd_sml = TCP_SKB_CB(skb)->end_seq;
-}
 
 static inline void tcp_check_probe_timer(struct sock *sk)
 {

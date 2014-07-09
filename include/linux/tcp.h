@@ -201,10 +201,10 @@ struct tcp_sock {
 	u32	tlp_high_seq;	/* snd_nxt at the time of TLP retransmit. */
 
 /* RTT measurement */
-	u32	srtt;		/* smoothed round trip time << 3	*/
-	u32	mdev;		/* medium deviation			*/
-	u32	mdev_max;	/* maximal mdev for the last rtt period	*/
-	u32	rttvar;		/* smoothed mdev_max			*/
+	u32	srtt_us;	/* smoothed round trip time << 3 in usecs */
+	u32	mdev_us;	/* medium deviation			*/
+	u32	mdev_max_us;	/* maximal mdev for the last rtt period	*/
+	u32	rttvar_us;	/* smoothed mdev_max			*/
 	u32	rtt_seq;	/* sequence number to update rttvar	*/
 
 	u32	packets_out;	/* Packets which are "in flight"	*/
@@ -248,7 +248,10 @@ struct tcp_sock {
 	struct sk_buff* lost_skb_hint;
 	struct sk_buff *retransmit_skb_hint;
 
-	struct sk_buff_head	out_of_order_queue; /* Out of order segments go here */
+	/* OOO segments go in this list. Note that socket lock must be held,
+	 * as we do not use sk_buff_head lock.
+	 */
+	struct sk_buff_head	out_of_order_queue;
 
 	/* SACKs data, these 2 need to be together (see tcp_options_write) */
 	struct tcp_sack_block duplicate_sack[1]; /* D-SACK block */

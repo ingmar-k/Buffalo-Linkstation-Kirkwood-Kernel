@@ -22,9 +22,6 @@
 #include <drv_types.h>
 #include <recv_osdep.h>
 #include <mlme_osdep.h>
-#include <ip.h>
-#include <if_ether.h>
-#include <ethernet.h>
 
 #include <usb_ops.h>
 #include <wifi.h>
@@ -75,7 +72,7 @@ int	rtl8188eu_init_recv_priv(struct adapter *padapter)
 
 	for (i = 0; i < NR_RECVBUFF; i++) {
 		_rtw_init_listhead(&precvbuf->list);
-		_rtw_spinlock_init(&precvbuf->recvbuf_lock);
+		spin_lock_init(&precvbuf->recvbuf_lock);
 		precvbuf->alloc_sz = MAX_RECVBUF_SZ;
 		res = rtw_os_recvbuf_resource_alloc(padapter, precvbuf);
 		if (res == _FAIL)

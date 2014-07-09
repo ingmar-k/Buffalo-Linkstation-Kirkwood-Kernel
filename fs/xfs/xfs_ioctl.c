@@ -112,15 +112,11 @@ xfs_find_handle(
 		memset(&handle.ha_fid, 0, sizeof(handle.ha_fid));
 		hsize = sizeof(xfs_fsid_t);
 	} else {
-		int		lock_mode;
-
-		lock_mode = xfs_ilock_map_shared(ip);
 		handle.ha_fid.fid_len = sizeof(xfs_fid_t) -
 					sizeof(handle.ha_fid.fid_len);
 		handle.ha_fid.fid_pad = 0;
 		handle.ha_fid.fid_gen = ip->i_d.di_gen;
 		handle.ha_fid.fid_ino = ip->i_ino;
-		xfs_iunlock_map_shared(ip, lock_mode);
 
 		hsize = XFS_HSIZE(handle);
 	}
@@ -275,32 +271,6 @@ xfs_open_by_handle(
 	return error;
 }
 
-/*
- * This is a copy from fs/namei.c:vfs_readlink(), except for removing it's
- * unused first argument.
- */
-STATIC int
-do_readlink(
-	char __user		*buffer,
-	int			buflen,
-	const char		*link)
-{
-        int len;
-
-	len = PTR_ERR(link);
-	if (IS_ERR(link))
-		goto out;
-
-	len = strlen(link);
-	if (len > (unsigned) buflen)
-		len = buflen;
-	if (copy_to_user(buffer, link, len))
-		len = -EFAULT;
- out:
-	return len;
-}
-
-
 int
 xfs_readlink_by_handle(
 	struct file		*parfilp,
@@ -338,7 +308,7 @@ xfs_readlink_by_handle(
 	error = -xfs_readlink(XFS_I(dentry->d_inode), link);
 	if (error)
 		goto out_kfree;
-	error = do_readlink(hreq->ohandle, olen, link);
+	error = readlink_copy(hreq->ohandle, olen, link);
 	if (error)
 		goto out_kfree;
 
@@ -1245,7 +1215,7 @@ xfs_ioctl_setattr(
 		 * cleared upon successful return from chown()
 		 */
 		if ((ip->i_d.di_mode & (S_ISUID|S_ISGID)) &&
-		    !inode_capable(VFS_I(ip), CAP_FSETID))
+		    !capable_wrt_inode_uidgid(VFS_I(ip), CAP_FSETID))
 			ip->i_d.di_mode &= ~(S_ISUID|S_ISGID);
 
 		/*
@@ -1587,7 +1557,7 @@ xfs_file_ioctl(
 			XFS_IS_REALTIME_INODE(ip) ?
 			mp->m_rtdev_targp : mp->m_ddev_targp;
 
-		da.d_mem = da.d_miniosz = 1 << target->bt_sshift;
+		da.d_mem =  da.d_miniosz = target->bt_logical_sectorsize;
 		da.d_maxiosz = INT_MAX & ~(da.d_miniosz - 1);
 
 		if (copy_to_user(arg, &da, sizeof(da)))

@@ -22,8 +22,6 @@
 #include <sound/soc.h>
 #include <sound/pcm_params.h>
 
-#include <mach/dma.h>
-
 #include <linux/platform_data/asoc-s3c.h>
 
 #include "dma.h"
@@ -702,6 +700,8 @@ static int i2s_hw_params(struct snd_pcm_substream *substream,
 	}
 	writel(mod, i2s->addr + I2SMOD);
 
+	samsung_asoc_init_dma_data(dai, &i2s->dma_playback, &i2s->dma_capture);
+
 	i2s->frmclk = params_rate(params);
 
 	return 0;
@@ -946,8 +946,11 @@ static int samsung_i2s_dai_probe(struct snd_soc_dai *dai)
 	struct i2s_dai *i2s = to_info(dai);
 	struct i2s_dai *other = i2s->pri_dai ? : i2s->sec_dai;
 
-	if (other && other->clk) /* If this is probe on secondary */
+	if (other && other->clk) { /* If this is probe on secondary */
+		samsung_asoc_init_dma_data(dai, &other->sec_dai->dma_playback,
+					   NULL);
 		goto probe_exit;
+	}
 
 	i2s->addr = ioremap(i2s->base, 0x100);
 	if (i2s->addr == NULL) {
@@ -963,7 +966,7 @@ static int samsung_i2s_dai_probe(struct snd_soc_dai *dai)
 	}
 	clk_prepare_enable(i2s->clk);
 
-	snd_soc_dai_init_dma_data(dai, &i2s->dma_playback, &i2s->dma_capture);
+	samsung_asoc_init_dma_data(dai, &i2s->dma_playback, &i2s->dma_capture);
 
 	if (other) {
 		other->addr = i2s->addr;
@@ -1208,10 +1211,10 @@ static int samsung_i2s_probe(struct platform_device *pdev)
 	pri_dai->dma_playback.dma_addr = regs_base + I2STXD;
 	pri_dai->dma_capture.dma_addr = regs_base + I2SRXD;
 	pri_dai->dma_playback.client =
-		(struct s3c2410_dma_client *)&pri_dai->dma_playback;
+		(struct s3c_dma_client *)&pri_dai->dma_playback;
 	pri_dai->dma_playback.ch_name = "tx";
 	pri_dai->dma_capture.client =
-		(struct s3c2410_dma_client *)&pri_dai->dma_capture;
+		(struct s3c_dma_client *)&pri_dai->dma_capture;
 	pri_dai->dma_capture.ch_name = "rx";
 	pri_dai->dma_playback.dma_size = 4;
 	pri_dai->dma_capture.dma_size = 4;
@@ -1230,7 +1233,7 @@ static int samsung_i2s_probe(struct platform_device *pdev)
 		}
 		sec_dai->dma_playback.dma_addr = regs_base + I2STXDS;
 		sec_dai->dma_playback.client =
-			(struct s3c2410_dma_client *)&sec_dai->dma_playback;
+			(struct s3c_dma_client *)&sec_dai->dma_playback;
 		sec_dai->dma_playback.ch_name = "tx-sec";
 
 		if (!np) {
@@ -1263,7 +1266,8 @@ static int samsung_i2s_probe(struct platform_device *pdev)
 
 	return 0;
 err:
-	release_mem_region(regs_base, resource_size(res));
+	if (res)
+		release_mem_region(regs_base, resource_size(res));
 
 	return ret;
 }

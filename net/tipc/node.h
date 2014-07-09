@@ -2,7 +2,7 @@
  * net/tipc/node.h: Include file for TIPC node management routines
  *
  * Copyright (c) 2000-2006, Ericsson AB
- * Copyright (c) 2005, 2010-2011, Wind River Systems
+ * Copyright (c) 2005, 2010-2014, Wind River Systems
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -64,9 +64,9 @@
  * @working_links: number of working links to node (both active and standby)
  * @block_setup: bit mask of conditions preventing link establishment to node
  * @link_cnt: number of links to node
- * @permit_changeover: non-zero if node has redundant links to this system
  * @signature: node instance identifier
  * @bclink: broadcast-related info
+ * @rcu: rcu struct for tipc_node
  *    @acked: sequence # of last outbound b'cast message acknowledged by node
  *    @last_in: sequence # of last in-sequence b'cast message received from node
  *    @last_sent: sequence # of last b'cast message sent by node
@@ -89,8 +89,8 @@ struct tipc_node {
 	int link_cnt;
 	int working_links;
 	int block_setup;
-	int permit_changeover;
 	u32 signature;
+	struct rcu_head rcu;
 	struct {
 		u32 acked;
 		u32 last_in;
@@ -109,13 +109,12 @@ extern struct list_head tipc_node_list;
 
 struct tipc_node *tipc_node_find(u32 addr);
 struct tipc_node *tipc_node_create(u32 addr);
-void tipc_node_delete(struct tipc_node *n_ptr);
+void tipc_node_stop(void);
 void tipc_node_attach_link(struct tipc_node *n_ptr, struct tipc_link *l_ptr);
 void tipc_node_detach_link(struct tipc_node *n_ptr, struct tipc_link *l_ptr);
 void tipc_node_link_down(struct tipc_node *n_ptr, struct tipc_link *l_ptr);
 void tipc_node_link_up(struct tipc_node *n_ptr, struct tipc_link *l_ptr);
 int tipc_node_active_links(struct tipc_node *n_ptr);
-int tipc_node_redundant_links(struct tipc_node *n_ptr);
 int tipc_node_is_up(struct tipc_node *n_ptr);
 struct sk_buff *tipc_node_get_links(const void *req_tlv_area, int req_tlv_space);
 struct sk_buff *tipc_node_get_nodes(const void *req_tlv_area, int req_tlv_space);

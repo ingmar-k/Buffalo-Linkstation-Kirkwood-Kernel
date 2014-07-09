@@ -410,7 +410,7 @@ static void rtl_usb_init_sw(struct ieee80211_hw *hw)
 	mac->current_ampdu_factor = 3;
 
 	/* QOS */
-	rtlusb->acm_method = eAcmWay2_SW;
+	rtlusb->acm_method = EACMWAY2_SW;
 
 	/* IRQ */
 	/* HIMR - turn all on */
@@ -475,8 +475,6 @@ static void _rtl_usb_rx_process_agg(struct ieee80211_hw *hw,
 			rtlpriv->stats.rxbytesunicast +=  skb->len;
 		}
 
-		rtl_is_special_data(hw, skb, false);
-
 		if (ieee80211_is_data(fc)) {
 			rtlpriv->cfg->ops->led_control(hw, LED_CTL_RX);
 
@@ -518,8 +516,6 @@ static void _rtl_usb_rx_process_noagg(struct ieee80211_hw *hw,
 			unicast = true;
 			rtlpriv->stats.rxbytesunicast +=  skb->len;
 		}
-
-		rtl_is_special_data(hw, skb, false);
 
 		if (ieee80211_is_data(fc)) {
 			rtlpriv->cfg->ops->led_control(hw, LED_CTL_RX);
@@ -998,7 +994,7 @@ static void _rtl_usb_tx_preprocess(struct ieee80211_hw *hw,
 		seq_number += 1;
 		seq_number <<= 4;
 	}
-	rtlpriv->cfg->ops->fill_tx_desc(hw, hdr, (u8 *)pdesc, info, sta, skb,
+	rtlpriv->cfg->ops->fill_tx_desc(hw, hdr, (u8 *)pdesc, NULL, info, sta, skb,
 					hw_queue, &tcb_desc);
 	if (!ieee80211_has_morefrags(hdr->frame_control)) {
 		if (qc)

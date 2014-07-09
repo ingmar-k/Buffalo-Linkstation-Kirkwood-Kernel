@@ -66,10 +66,13 @@ struct comm *thread__comm(const struct thread *thread)
 int thread__set_comm(struct thread *thread, const char *str, u64 timestamp)
 {
 	struct comm *new, *curr = thread__comm(thread);
+	int err;
 
 	/* Override latest entry if it had no specific time coverage */
 	if (!curr->start) {
-		comm__override(curr, str, timestamp);
+		err = comm__override(curr, str, timestamp);
+		if (err)
+			return err;
 	} else {
 		new = comm__new(str, timestamp);
 		if (!new)
@@ -126,7 +129,7 @@ int thread__fork(struct thread *thread, struct thread *parent, u64 timestamp)
 		if (!comm)
 			return -ENOMEM;
 		err = thread__set_comm(thread, comm, timestamp);
-		if (!err)
+		if (err)
 			return err;
 		thread->comm_set = true;
 	}
@@ -138,4 +141,25 @@ int thread__fork(struct thread *thread, struct thread *parent, u64 timestamp)
 	thread->ppid = parent->tid;
 
 	return 0;
+}
+
+void thread__find_cpumode_addr_location(struct thread *thread,
+					struct machine *machine,
+					enum map_type type, u64 addr,
+					struct addr_location *al)
+{
+	size_t i;
+	const u8 const cpumodes[] = {
+		PERF_RECORD_MISC_USER,
+		PERF_RECORD_MISC_KERNEL,
+		PERF_RECORD_MISC_GUEST_USER,
+		PERF_RECORD_MISC_GUEST_KERNEL
+	};
+
+	for (i = 0; i < ARRAY_SIZE(cpumodes); i++) {
+		thread__find_addr_location(thread, machine, cpumodes[i], type,
+					   addr, al);
+		if (al->map)
+			break;
+	}
 }

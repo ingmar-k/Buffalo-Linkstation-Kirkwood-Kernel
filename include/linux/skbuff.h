@@ -32,13 +32,85 @@
 #include <linux/hrtimer.h>
 #include <linux/dma-mapping.h>
 #include <linux/netdev_features.h>
+#include <linux/sched.h>
 #include <net/flow_keys.h>
 
+/* A. Checksumming of received packets by device.
+ *
+ * CHECKSUM_NONE:
+ *
+ *   Device failed to checksum this packet e.g. due to lack of capabilities.
+ *   The packet contains full (though not verified) checksum in packet but
+ *   not in skb->csum. Thus, skb->csum is undefined in this case.
+ *
+ * CHECKSUM_UNNECESSARY:
+ *
+ *   The hardware you're dealing with doesn't calculate the full checksum
+ *   (as in CHECKSUM_COMPLETE), but it does parse headers and verify checksums
+ *   for specific protocols e.g. TCP/UDP/SCTP, then, for such packets it will
+ *   set CHECKSUM_UNNECESSARY if their checksums are okay. skb->csum is still
+ *   undefined in this case though. It is a bad option, but, unfortunately,
+ *   nowadays most vendors do this. Apparently with the secret goal to sell
+ *   you new devices, when you will add new protocol to your host, f.e. IPv6 8)
+ *
+ * CHECKSUM_COMPLETE:
+ *
+ *   This is the most generic way. The device supplied checksum of the _whole_
+ *   packet as seen by netif_rx() and fills out in skb->csum. Meaning, the
+ *   hardware doesn't need to parse L3/L4 headers to implement this.
+ *
+ *   Note: Even if device supports only some protocols, but is able to produce
+ *   skb->csum, it MUST use CHECKSUM_COMPLETE, not CHECKSUM_UNNECESSARY.
+ *
+ * CHECKSUM_PARTIAL:
+ *
+ *   This is identical to the case for output below. This may occur on a packet
+ *   received directly from another Linux OS, e.g., a virtualized Linux kernel
+ *   on the same host. The packet can be treated in the same way as
+ *   CHECKSUM_UNNECESSARY, except that on output (i.e., forwarding) the
+ *   checksum must be filled in by the OS or the hardware.
+ *
+ * B. Checksumming on output.
+ *
+ * CHECKSUM_NONE:
+ *
+ *   The skb was already checksummed by the protocol, or a checksum is not
+ *   required.
+ *
+ * CHECKSUM_PARTIAL:
+ *
+ *   The device is required to checksum the packet as seen by hard_start_xmit()
+ *   from skb->csum_start up to the end, and to record/write the checksum at
+ *   offset skb->csum_start + skb->csum_offset.
+ *
+ *   The device must show its capabilities in dev->features, set up at device
+ *   setup time, e.g. netdev_features.h:
+ *
+ *	NETIF_F_HW_CSUM	- It's a clever device, it's able to checksum everything.
+ *	NETIF_F_IP_CSUM - Device is dumb, it's able to checksum only TCP/UDP over
+ *			  IPv4. Sigh. Vendors like this way for an unknown reason.
+ *			  Though, see comment above about CHECKSUM_UNNECESSARY. 8)
+ *	NETIF_F_IPV6_CSUM - About as dumb as the last one but does IPv6 instead.
+ *	NETIF_F_...     - Well, you get the picture.
+ *
+ * CHECKSUM_UNNECESSARY:
+ *
+ *   Normally, the device will do per protocol specific checksumming. Protocol
+ *   implementations that do not want the NIC to perform the checksum
+ *   calculation should use this flag in their outgoing skbs.
+ *
+ *	NETIF_F_FCOE_CRC - This indicates that the device can do FCoE FC CRC
+ *			   offload. Correspondingly, the FCoE protocol driver
+ *			   stack should use CHECKSUM_UNNECESSARY.
+ *
+ * Any questions? No questions, good.		--ANK
+ */
+
 /* Don't change this without changing skb_csum_unnecessary! */
-#define CHECKSUM_NONE 0
-#define CHECKSUM_UNNECESSARY 1
-#define CHECKSUM_COMPLETE 2
-#define CHECKSUM_PARTIAL 3
+#define CHECKSUM_NONE		0
+#define CHECKSUM_UNNECESSARY	1
+#define CHECKSUM_COMPLETE	2
+#define CHECKSUM_PARTIAL	3
 
 #define SKB_DATA_ALIGN(X)	(((X) + (SMP_CACHE_BYTES - 1)) & \
 				 ~(SMP_CACHE_BYTES - 1))
@@ -53,58 +125,6 @@
 #define SKB_TRUESIZE(X) ((X) +						\
 			 SKB_DATA_ALIGN(sizeof(struct sk_buff)) +	\
 			 SKB_DATA_ALIGN(sizeof(struct skb_shared_info)))
-
-/* A. Checksumming of received packets by device.
- *
- *	NONE: device failed to checksum this packet.
- *		skb->csum is undefined.
- *
- *	UNNECESSARY: device parsed packet and wouldbe verified checksum.
- *		skb->csum is undefined.
- *	      It is bad option, but, unfortunately, many of vendors do this.
- *	      Apparently with secret goal to sell you new device, when you
- *	      will add new protocol to your host. F.e. IPv6. 8)
- *
- *	COMPLETE: the most generic way. Device supplied checksum of _all_
- *	    the packet as seen by netif_rx in skb->csum.
- *	    NOTE: Even if device supports only some protocols, but
- *	    is able to produce some skb->csum, it MUST use COMPLETE,
- *	    not UNNECESSARY.
- *
- *	PARTIAL: identical to the case for output below.  This may occur
- *	    on a packet received directly from another Linux OS, e.g.,
- *	    a virtualised Linux kernel on the same host.  The packet can
- *	    be treated in the same way as UNNECESSARY except that on
- *	    output (i.e., forwarding) the checksum must be filled in
- *	    by the OS or the hardware.
- *
- * B. Checksumming on output.
- *
- *	NONE: skb is checksummed by protocol or csum is not required.
- *
- *	PARTIAL: device is required to csum packet as seen by hard_start_xmit
- *	from skb->csum_start to the end and to record the checksum
- *	at skb->csum_start + skb->csum_offset.
- *
- *	Device must show its capabilities in dev->features, set
- *	at device setup time.
- *	NETIF_F_HW_CSUM	- it is clever device, it is able to checksum
- *			  everything.
- *	NETIF_F_IP_CSUM - device is dumb. It is able to csum only
- *			  TCP/UDP over IPv4. Sigh. Vendors like this
- *			  way by an unknown reason. Though, see comment above
- *			  about CHECKSUM_UNNECESSARY. 8)
- *	NETIF_F_IPV6_CSUM about as dumb as the last one but does IPv6 instead.
- *
- *	UNNECESSARY: device will do per protocol specific csum. Protocol drivers
- *	that do not want net to perform the checksum calculation should use
- *	this flag in their outgoing skbs.
- *	NETIF_F_FCOE_CRC  this indicates the device can do FCoE FC CRC
- *			  offload. Correspondingly, the FCoE protocol driver
- *			  stack should use CHECKSUM_UNNECESSARY.
- *
- *	Any questions? No questions, good. 		--ANK
- */
 
 struct net_device;
 struct scatterlist;
@@ -337,11 +357,62 @@ typedef unsigned int sk_buff_data_t;
 typedef unsigned char *sk_buff_data_t;
 #endif
 
+/**
+ * struct skb_mstamp - multi resolution time stamps
+ * @stamp_us: timestamp in us resolution
+ * @stamp_jiffies: timestamp in jiffies
+ */
+struct skb_mstamp {
+	union {
+		u64		v64;
+		struct {
+			u32	stamp_us;
+			u32	stamp_jiffies;
+		};
+	};
+};
+
+/**
+ * skb_mstamp_get - get current timestamp
+ * @cl: place to store timestamps
+ */
+static inline void skb_mstamp_get(struct skb_mstamp *cl)
+{
+	u64 val = local_clock();
+
+	do_div(val, NSEC_PER_USEC);
+	cl->stamp_us = (u32)val;
+	cl->stamp_jiffies = (u32)jiffies;
+}
+
+/**
+ * skb_mstamp_delta - compute the difference in usec between two skb_mstamp
+ * @t1: pointer to newest sample
+ * @t0: pointer to oldest sample
+ */
+static inline u32 skb_mstamp_us_delta(const struct skb_mstamp *t1,
+				      const struct skb_mstamp *t0)
+{
+	s32 delta_us = t1->stamp_us - t0->stamp_us;
+	u32 delta_jiffies = t1->stamp_jiffies - t0->stamp_jiffies;
+
+	/* If delta_us is negative, this might be because interval is too big,
+	 * or local_clock() drift is too big : fallback using jiffies.
+	 */
+	if (delta_us <= 0 ||
+	    delta_jiffies >= (INT_MAX / (USEC_PER_SEC / HZ)))
+
+		delta_us = jiffies_to_usecs(delta_jiffies);
+
+	return delta_us;
+}
+
+
 /** 
  *	struct sk_buff - socket buffer
  *	@next: Next buffer in list
  *	@prev: Previous buffer in list
- *	@tstamp: Time we arrived
+ *	@tstamp: Time we arrived/left
  *	@sk: Socket we are owned by
  *	@dev: Device we arrived on/are leaving by
  *	@cb: Control buffer. Free for use by every layer. Put private vars here
@@ -373,11 +444,11 @@ typedef unsigned char *sk_buff_data_t;
  *	@skb_iif: ifindex of device we arrived on
  *	@tc_index: Traffic control index
  *	@tc_verd: traffic control verdict
- *	@rxhash: the packet hash computed on receive
+ *	@hash: the packet hash
  *	@queue_mapping: Queue mapping for multiqueue devices
  *	@ndisc_nodetype: router type (from link layer)
  *	@ooo_okay: allow the mapping of a socket to a queue to be changed
- *	@l4_rxhash: indicate rxhash is a canonical 4-tuple hash over transport
+ *	@l4_hash: indicate hash is a canonical 4-tuple hash over transport
  *		ports.
  *	@wifi_acked_valid: wifi_acked was set
  *	@wifi_acked: whether frame was acked on wifi or not
@@ -410,7 +481,10 @@ struct sk_buff {
 	struct sk_buff		*next;
 	struct sk_buff		*prev;
 
-	ktime_t			tstamp;
+	union {
+		ktime_t		tstamp;
+		struct skb_mstamp skb_mstamp;
+	};
 
 	struct sock		*sk;
 	struct net_device	*dev;
@@ -463,7 +537,7 @@ struct sk_buff {
 
 	int			skb_iif;
 
-	__u32			rxhash;
+	__u32			hash;
 
 	__be16			vlan_proto;
 	__u16			vlan_tci;
@@ -482,7 +556,7 @@ struct sk_buff {
 #endif
 	__u8			pfmemalloc:1;
 	__u8			ooo_okay:1;
-	__u8			l4_rxhash:1;
+	__u8			l4_hash:1;
 	__u8			wifi_acked_valid:1;
 	__u8			wifi_acked:1;
 	__u8			no_fcs:1;
@@ -672,6 +746,8 @@ struct sk_buff *skb_realloc_headroom(struct sk_buff *skb,
 				     unsigned int headroom);
 struct sk_buff *skb_copy_expand(const struct sk_buff *skb, int newheadroom,
 				int newtailroom, gfp_t priority);
+int skb_to_sgvec_nomark(struct sk_buff *skb, struct scatterlist *sg,
+			int offset, int len);
 int skb_to_sgvec(struct sk_buff *skb, struct scatterlist *sg, int offset,
 		 int len);
 int skb_cow_data(struct sk_buff *skb, int tailbits, struct sk_buff **trailer);
@@ -703,14 +779,77 @@ unsigned int skb_find_text(struct sk_buff *skb, unsigned int from,
 			   unsigned int to, struct ts_config *config,
 			   struct ts_state *state);
 
-void __skb_get_rxhash(struct sk_buff *skb);
-static inline __u32 skb_get_rxhash(struct sk_buff *skb)
-{
-	if (!skb->l4_rxhash)
-		__skb_get_rxhash(skb);
+/*
+ * Packet hash types specify the type of hash in skb_set_hash.
+ *
+ * Hash types refer to the protocol layer addresses which are used to
+ * construct a packet's hash. The hashes are used to differentiate or identify
+ * flows of the protocol layer for the hash type. Hash types are either
+ * layer-2 (L2), layer-3 (L3), or layer-4 (L4).
+ *
+ * Properties of hashes:
+ *
+ * 1) Two packets in different flows have different hash values
+ * 2) Two packets in the same flow should have the same hash value
+ *
+ * A hash at a higher layer is considered to be more specific. A driver should
+ * set the most specific hash possible.
+ *
+ * A driver cannot indicate a more specific hash than the layer at which a hash
+ * was computed. For instance an L3 hash cannot be set as an L4 hash.
+ *
+ * A driver may indicate a hash level which is less specific than the
+ * actual layer the hash was computed on. For instance, a hash computed
+ * at L4 may be considered an L3 hash. This should only be done if the
+ * driver can't unambiguously determine that the HW computed the hash at
+ * the higher layer. Note that the "should" in the second property above
+ * permits this.
+ */
+enum pkt_hash_types {
+	PKT_HASH_TYPE_NONE,	/* Undefined type */
+	PKT_HASH_TYPE_L2,	/* Input: src_MAC, dest_MAC */
+	PKT_HASH_TYPE_L3,	/* Input: src_IP, dst_IP */
+	PKT_HASH_TYPE_L4,	/* Input: src_IP, dst_IP, src_port, dst_port */
+};
 
-	return skb->rxhash;
+static inline void
+skb_set_hash(struct sk_buff *skb, __u32 hash, enum pkt_hash_types type)
+{
+	skb->l4_hash = (type == PKT_HASH_TYPE_L4);
+	skb->hash = hash;
 }
+
+void __skb_get_hash(struct sk_buff *skb);
+static inline __u32 skb_get_hash(struct sk_buff *skb)
+{
+	if (!skb->l4_hash)
+		__skb_get_hash(skb);
+
+	return skb->hash;
+}
+
+static inline __u32 skb_get_hash_raw(const struct sk_buff *skb)
+{
+	return skb->hash;
+}
+
+static inline void skb_clear_hash(struct sk_buff *skb)
+{
+	skb->hash = 0;
+	skb->l4_hash = 0;
+}
+
+static inline void skb_clear_hash_if_not_l4(struct sk_buff *skb)
+{
+	if (!skb->l4_hash)
+		skb_clear_hash(skb);
+}
+
+static inline void skb_copy_hash(struct sk_buff *to, const struct sk_buff *from)
+{
+	to->hash = from->hash;
+	to->l4_hash = from->l4_hash;
+};
 
 #ifdef NET_SKBUFF_DATA_USES_OFFSET
 static inline unsigned char *skb_end_pointer(const struct sk_buff *skb)
@@ -750,7 +889,7 @@ static inline struct skb_shared_hwtstamps *skb_hwtstamps(struct sk_buff *skb)
  */
 static inline int skb_queue_empty(const struct sk_buff_head *list)
 {
-	return list->next == (struct sk_buff *)list;
+	return list->next == (const struct sk_buff *) list;
 }
 
 /**
@@ -763,7 +902,7 @@ static inline int skb_queue_empty(const struct sk_buff_head *list)
 static inline bool skb_queue_is_last(const struct sk_buff_head *list,
 				     const struct sk_buff *skb)
 {
-	return skb->next == (struct sk_buff *)list;
+	return skb->next == (const struct sk_buff *) list;
 }
 
 /**
@@ -776,7 +915,7 @@ static inline bool skb_queue_is_last(const struct sk_buff_head *list,
 static inline bool skb_queue_is_first(const struct sk_buff_head *list,
 				      const struct sk_buff *skb)
 {
-	return skb->prev == (struct sk_buff *)list;
+	return skb->prev == (const struct sk_buff *) list;
 }
 
 /**
@@ -1956,7 +2095,7 @@ static inline void skb_propagate_pfmemalloc(struct page *page,
 }
 
 /**
- * skb_frag_page - retrieve the page refered to by a paged fragment
+ * skb_frag_page - retrieve the page referred to by a paged fragment
  * @frag: the paged fragment
  *
  * Returns the &struct page associated with @frag.
@@ -2368,6 +2507,9 @@ int skb_splice_bits(struct sk_buff *skb, unsigned int offset,
 		    struct pipe_inode_info *pipe, unsigned int len,
 		    unsigned int flags);
 void skb_copy_and_csum_dev(const struct sk_buff *skb, u8 *to);
+unsigned int skb_zerocopy_headlen(const struct sk_buff *from);
+int skb_zerocopy(struct sk_buff *to, struct sk_buff *from,
+		 int len, int hlen);
 void skb_split(struct sk_buff *skb, struct sk_buff *skb1, const u32 len);
 int skb_shift(struct sk_buff *tgt, struct sk_buff *skb, int shiftlen);
 void skb_scrub_packet(struct sk_buff *skb, bool xnet);
@@ -2396,6 +2538,24 @@ static inline void *skb_header_pointer(const struct sk_buff *skb, int offset,
 		return NULL;
 
 	return buffer;
+}
+
+/**
+ *	skb_needs_linearize - check if we need to linearize a given skb
+ *			      depending on the given device features.
+ *	@skb: socket buffer to check
+ *	@features: net device features
+ *
+ *	Returns true if either:
+ *	1. skb has frag_list and the device doesn't support FRAGLIST, or
+ *	2. skb is fragmented and the device does not support SG.
+ */
+static inline bool skb_needs_linearize(struct sk_buff *skb,
+				       netdev_features_t features)
+{
+	return skb_is_nonlinear(skb) &&
+	       ((skb_has_frag_list(skb) && !(features & NETIF_F_FRAGLIST)) ||
+		(skb_shinfo(skb)->nr_frags && !(features & NETIF_F_SG)));
 }
 
 static inline void skb_copy_from_linear_data(const struct sk_buff *skb,
@@ -2469,8 +2629,6 @@ static inline ktime_t net_invalid_timestamp(void)
 {
 	return ktime_set(0, 0);
 }
-
-void skb_timestamping_init(void);
 
 #ifdef CONFIG_NETWORK_PHY_TIMESTAMPING
 
@@ -2622,7 +2780,7 @@ static inline void nf_reset(struct sk_buff *skb)
 
 static inline void nf_reset_trace(struct sk_buff *skb)
 {
-#if IS_ENABLED(CONFIG_NETFILTER_XT_TARGET_TRACE)
+#if IS_ENABLED(CONFIG_NETFILTER_XT_TARGET_TRACE) || defined(CONFIG_NF_TABLES)
 	skb->nf_trace = 0;
 #endif
 }
@@ -2638,6 +2796,9 @@ static inline void __nf_copy(struct sk_buff *dst, const struct sk_buff *src)
 #ifdef CONFIG_BRIDGE_NETFILTER
 	dst->nf_bridge  = src->nf_bridge;
 	nf_bridge_get(src->nf_bridge);
+#endif
+#if IS_ENABLED(CONFIG_NETFILTER_XT_TARGET_TRACE) || defined(CONFIG_NF_TABLES)
+	dst->nf_trace = src->nf_trace;
 #endif
 }
 
@@ -2669,6 +2830,19 @@ static inline void skb_copy_secmark(struct sk_buff *to, const struct sk_buff *fr
 static inline void skb_init_secmark(struct sk_buff *skb)
 { }
 #endif
+
+static inline bool skb_irq_freeable(const struct sk_buff *skb)
+{
+	return !skb->destructor &&
+#if IS_ENABLED(CONFIG_XFRM)
+		!skb->sp &&
+#endif
+#if IS_ENABLED(CONFIG_NF_CONNTRACK)
+		!skb->nfct &&
+#endif
+		!skb->_skb_refdst &&
+		!skb_has_frag_list(skb);
+}
 
 static inline void skb_set_queue_mapping(struct sk_buff *skb, u16 queue_mapping)
 {
@@ -2795,6 +2969,8 @@ static inline void skb_checksum_none_assert(const struct sk_buff *skb)
 }
 
 bool skb_partial_csum_set(struct sk_buff *skb, u16 start, u16 off);
+
+int skb_checksum_setup(struct sk_buff *skb, bool recalculate);
 
 u32 __skb_get_poff(const struct sk_buff *skb);
 

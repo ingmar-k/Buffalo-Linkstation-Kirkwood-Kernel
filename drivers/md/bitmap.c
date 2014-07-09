@@ -1635,7 +1635,7 @@ int bitmap_create(struct mddev *mddev)
 	sector_t blocks = mddev->resync_max_sectors;
 	struct file *file = mddev->bitmap_info.file;
 	int err;
-	struct sysfs_dirent *bm = NULL;
+	struct kernfs_node *bm = NULL;
 
 	BUILD_BUG_ON(sizeof(bitmap_super_t) != 256);
 
@@ -1988,7 +1988,6 @@ location_store(struct mddev *mddev, const char *buf, size_t len)
 		if (mddev->bitmap_info.file) {
 			struct file *f = mddev->bitmap_info.file;
 			mddev->bitmap_info.file = NULL;
-			restore_bitmap_write_access(f);
 			fput(f);
 		}
 	} else {

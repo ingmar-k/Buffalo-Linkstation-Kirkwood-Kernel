@@ -38,10 +38,7 @@ static inline pmd_t *pmd_off_k(unsigned long virt)
 
 struct mem_type {
 	pteval_t prot_pte;
-#ifndef __GENKSYMS__
-/* Added in 3.13.6, not an ABI change as the structure is opaque to modules */
 	pteval_t prot_pte_s2;
-#endif
 	pmdval_t prot_l1;
 	pmdval_t prot_sect;
 	unsigned int domain;

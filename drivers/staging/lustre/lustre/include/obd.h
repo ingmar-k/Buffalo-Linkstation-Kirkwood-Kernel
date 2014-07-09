@@ -158,7 +158,7 @@ struct obd_info {
 	/* statfs data specific for every OSC, if needed at all. */
 	struct obd_statfs      *oi_osfs;
 	/* An update callback which is called to update some data on upper
-	 * level. E.g. it is used for update lsm->lsm_oinfo at every recieved
+	 * level. E.g. it is used for update lsm->lsm_oinfo at every received
 	 * request in osc level for enqueue requests. It is also possible to
 	 * update some caller data from LOV layer if needed. */
 	obd_enqueue_update_f    oi_cb_up;
@@ -399,8 +399,8 @@ struct client_obd {
 
 	/* mgc datastruct */
 	struct semaphore	 cl_mgc_sem;
-	struct vfsmount	 *cl_mgc_vfsmnt;
-	struct dentry	   *cl_mgc_configs_dir;
+	struct local_oid_storage *cl_mgc_los;
+	struct dt_object	*cl_mgc_configs_dir;
 	atomic_t	     cl_mgc_refcount;
 	struct obd_export       *cl_mgc_mgsexp;
 
@@ -1022,6 +1022,7 @@ struct lu_context;
 #define IT_LAYOUT   (1 << 10)
 #define IT_QUOTA_DQACQ (1 << 11)
 #define IT_QUOTA_CONN  (1 << 12)
+#define IT_SETXATTR (1 << 13)
 
 static inline int it_to_lock_mode(struct lookup_intent *it)
 {
@@ -1031,14 +1032,18 @@ static inline int it_to_lock_mode(struct lookup_intent *it)
 	else if (it->it_op & (IT_READDIR | IT_GETATTR | IT_OPEN | IT_LOOKUP |
 			      IT_LAYOUT))
 		return LCK_CR;
+	else if (it->it_op &  IT_GETXATTR)
+		return LCK_PR;
+	else if (it->it_op &  IT_SETXATTR)
+		return LCK_PW;
 
 	LASSERTF(0, "Invalid it_op: %d\n", it->it_op);
 	return -EINVAL;
 }
 
 struct md_op_data {
-	struct lu_fid	   op_fid1; /* operation fid1 (usualy parent) */
-	struct lu_fid	   op_fid2; /* operation fid2 (usualy child) */
+	struct lu_fid	   op_fid1; /* operation fid1 (usually parent) */
+	struct lu_fid	   op_fid2; /* operation fid2 (usually child) */
 	struct lu_fid	   op_fid3; /* 2 extra fids to find conflicting */
 	struct lu_fid	   op_fid4; /* to the operation locks. */
 	mdsno_t		 op_mds;  /* what mds server open will go to */
@@ -1070,7 +1075,7 @@ struct md_op_data {
 	struct obd_capa	*op_capa2;
 
 	/* Various operation flags. */
-	__u32		   op_bias;
+	enum mds_op_bias        op_bias;
 
 	/* Operation type */
 	__u32		   op_opc;
@@ -1084,6 +1089,10 @@ struct md_op_data {
 	/* used to transfer info between the stacks of MD client
 	 * see enum op_cli_flags */
 	__u32			op_cli_flags;
+
+	/* File object data version for HSM release, on client */
+	__u64			op_data_version;
+	struct lustre_handle	op_lease_handle;
 };
 
 enum op_cli_flags {
@@ -1314,7 +1323,8 @@ struct md_open_data {
 	struct obd_client_handle *mod_och;
 	struct ptlrpc_request    *mod_open_req;
 	struct ptlrpc_request    *mod_close_req;
-	atomic_t	      mod_refcount;
+	atomic_t		  mod_refcount;
+	bool			  mod_is_create;
 };
 
 struct lookup_intent;
@@ -1383,7 +1393,7 @@ struct md_ops {
 
 	int (*m_set_open_replay_data)(struct obd_export *,
 				      struct obd_client_handle *,
-				      struct ptlrpc_request *);
+				      struct lookup_intent *);
 	int (*m_clear_open_replay_data)(struct obd_export *,
 					struct obd_client_handle *);
 	int (*m_set_lock_data)(struct obd_export *, __u64 *, void *, __u64 *);

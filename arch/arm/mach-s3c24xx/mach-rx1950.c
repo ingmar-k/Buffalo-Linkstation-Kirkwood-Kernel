@@ -21,6 +21,7 @@
 #include <linux/gpio.h>
 #include <linux/platform_device.h>
 #include <linux/serial_core.h>
+#include <linux/serial_s3c.h>
 #include <linux/input.h>
 #include <linux/gpio_keys.h>
 #include <linux/device.h>
@@ -51,13 +52,14 @@
 #include <mach/fb.h>
 #include <mach/regs-gpio.h>
 #include <mach/regs-lcd.h>
+#include <mach/gpio-samsung.h>
 
 #include <plat/clock.h>
 #include <plat/cpu.h>
 #include <plat/devs.h>
 #include <plat/pm.h>
-#include <plat/regs-serial.h>
 #include <plat/samsung-time.h>
+#include <plat/gpio-cfg.h>
 
 #include "common.h"
 #include "h1940.h"

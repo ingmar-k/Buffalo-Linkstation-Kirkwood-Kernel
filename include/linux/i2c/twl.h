@@ -175,6 +175,9 @@ static inline int twl_class_is_ ##class(void)	\
 TWL_CLASS_IS(4030, TWL4030_CLASS_ID)
 TWL_CLASS_IS(6030, TWL6030_CLASS_ID)
 
+/* Set the regcache bypass for the regmap associated with the nodule */
+int twl_set_regcache_bypass(u8 mod_no, bool enable);
+
 /*
  * Read and write several 8-bit registers at once.
  */
@@ -190,6 +193,18 @@ static inline int twl_i2c_write_u8(u8 mod_no, u8 val, u8 reg) {
 
 static inline int twl_i2c_read_u8(u8 mod_no, u8 *val, u8 reg) {
 	return twl_i2c_read(mod_no, val, reg, 1);
+}
+
+static inline int twl_i2c_write_u16(u8 mod_no, u16 val, u8 reg) {
+	val = cpu_to_le16(val);
+	return twl_i2c_write(mod_no, (u8*) &val, reg, 2);
+}
+
+static inline int twl_i2c_read_u16(u8 mod_no, u16 *val, u8 reg) {
+	int ret;
+	ret = twl_i2c_read(mod_no, (u8*) val, reg, 2);
+	*val = le16_to_cpu(*val);
+	return ret;
 }
 
 int twl_get_type(void);
@@ -667,8 +682,6 @@ struct twl4030_codec_data {
 	unsigned int digimic_delay; /* in ms */
 	unsigned int ramp_delay_value;
 	unsigned int offset_cncl_path;
-	unsigned int check_defaults:1;
-	unsigned int reset_registers:1;
 	unsigned int hs_extmute:1;
 	int hs_extmute_gpio;
 };

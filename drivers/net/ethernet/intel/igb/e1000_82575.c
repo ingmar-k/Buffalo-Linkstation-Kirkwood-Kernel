@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel(R) Gigabit Ethernet Linux driver
-  Copyright(c) 2007-2013 Intel Corporation.
+  Copyright(c) 2007-2014 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -13,8 +13,7 @@
   more details.
 
   You should have received a copy of the GNU General Public License along with
-  this program; if not, write to the Free Software Foundation, Inc.,
-  51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
+  this program; if not, see <http://www.gnu.org/licenses/>.
 
   The full GNU General Public License is included in this distribution in
   the file called "COPYING".
@@ -77,8 +76,6 @@ static s32 igb_update_nvm_checksum_i350(struct e1000_hw *hw);
 static const u16 e1000_82580_rxpbs_table[] =
 	{ 36, 72, 144, 1, 2, 4, 8, 16,
 	  35, 70, 140 };
-#define E1000_82580_RXPBS_TABLE_SIZE \
-	(sizeof(e1000_82580_rxpbs_table)/sizeof(u16))
 
 /**
  *  igb_sgmii_uses_mdio_82575 - Determine if I2C pins are for external MDIO
@@ -110,6 +107,59 @@ static bool igb_sgmii_uses_mdio_82575(struct e1000_hw *hw)
 		break;
 	}
 	return ext_mdio;
+}
+
+/**
+ *  igb_check_for_link_media_swap - Check which M88E1112 interface linked
+ *  @hw: pointer to the HW structure
+ *
+ *  Poll the M88E1112 interfaces to see which interface achieved link.
+ */
+static s32 igb_check_for_link_media_swap(struct e1000_hw *hw)
+{
+	struct e1000_phy_info *phy = &hw->phy;
+	s32 ret_val;
+	u16 data;
+	u8 port = 0;
+
+	/* Check the copper medium. */
+	ret_val = phy->ops.write_reg(hw, E1000_M88E1112_PAGE_ADDR, 0);
+	if (ret_val)
+		return ret_val;
+
+	ret_val = phy->ops.read_reg(hw, E1000_M88E1112_STATUS, &data);
+	if (ret_val)
+		return ret_val;
+
+	if (data & E1000_M88E1112_STATUS_LINK)
+		port = E1000_MEDIA_PORT_COPPER;
+
+	/* Check the other medium. */
+	ret_val = phy->ops.write_reg(hw, E1000_M88E1112_PAGE_ADDR, 1);
+	if (ret_val)
+		return ret_val;
+
+	ret_val = phy->ops.read_reg(hw, E1000_M88E1112_STATUS, &data);
+	if (ret_val)
+		return ret_val;
+
+	/* reset page to 0 */
+	ret_val = phy->ops.write_reg(hw, E1000_M88E1112_PAGE_ADDR, 0);
+	if (ret_val)
+		return ret_val;
+
+	if (data & E1000_M88E1112_STATUS_LINK)
+		port = E1000_MEDIA_PORT_OTHER;
+
+	/* Determine if a swap needs to happen. */
+	if (port && (hw->dev_spec._82575.media_port != port)) {
+		hw->dev_spec._82575.media_port = port;
+		hw->dev_spec._82575.media_changed = true;
+	} else {
+		ret_val = igb_check_for_link_82575(hw);
+	}
+
+	return E1000_SUCCESS;
 }
 
 /**
@@ -189,6 +239,29 @@ static s32 igb_init_phy_params_82575(struct e1000_hw *hw)
 		else
 			phy->ops.get_cable_length = igb_get_cable_length_m88;
 		phy->ops.force_speed_duplex = igb_phy_force_speed_duplex_m88;
+		/* Check if this PHY is confgured for media swap. */
+		if (phy->id == M88E1112_E_PHY_ID) {
+			u16 data;
+
+			ret_val = phy->ops.write_reg(hw,
+						     E1000_M88E1112_PAGE_ADDR,
+						     2);
+			if (ret_val)
+				goto out;
+
+			ret_val = phy->ops.read_reg(hw,
+						    E1000_M88E1112_MAC_CTRL_1,
+						    &data);
+			if (ret_val)
+				goto out;
+
+			data = (data & E1000_M88E1112_MAC_CTRL_1_MODE_MASK) >>
+			       E1000_M88E1112_MAC_CTRL_1_MODE_SHIFT;
+			if (data == E1000_M88E1112_AUTO_COPPER_SGMII ||
+			    data == E1000_M88E1112_AUTO_COPPER_BASEX)
+				hw->mac.ops.check_for_link =
+						igb_check_for_link_media_swap;
+		}
 		break;
 	case IGP03E1000_E_PHY_ID:
 		phy->type = e1000_phy_igp_3;
@@ -365,6 +438,19 @@ static s32 igb_init_mac_params_82575(struct e1000_hw *hw)
 			? igb_setup_copper_link_82575
 			: igb_setup_serdes_link_82575;
 
+	if (mac->type == e1000_82580) {
+		switch (hw->device_id) {
+		/* feature not supported on these id's */
+		case E1000_DEV_ID_DH89XXCC_SGMII:
+		case E1000_DEV_ID_DH89XXCC_SERDES:
+		case E1000_DEV_ID_DH89XXCC_BACKPLANE:
+		case E1000_DEV_ID_DH89XXCC_SFP:
+			break;
+		default:
+			hw->dev_spec._82575.mas_capable = true;
+			break;
+		}
+	}
 	return 0;
 }
 
@@ -2219,7 +2305,7 @@ u16 igb_rxpbs_adjust_82580(u32 data)
 {
 	u16 ret_val = 0;
 
-	if (data < E1000_82580_RXPBS_TABLE_SIZE)
+	if (data < ARRAY_SIZE(e1000_82580_rxpbs_table))
 		ret_val = e1000_82580_rxpbs_table[data];
 
 	return ret_val;
@@ -2625,13 +2711,14 @@ static const u8 e1000_emc_therm_limit[4] = {
 	E1000_EMC_DIODE3_THERM_LIMIT
 };
 
+#ifdef CONFIG_IGB_HWMON
 /**
  *  igb_get_thermal_sensor_data_generic - Gathers thermal sensor data
  *  @hw: pointer to hardware structure
  *
  *  Updates the temperatures in mac.thermal_sensor_data
  **/
-s32 igb_get_thermal_sensor_data_generic(struct e1000_hw *hw)
+static s32 igb_get_thermal_sensor_data_generic(struct e1000_hw *hw)
 {
 	s32 status = E1000_SUCCESS;
 	u16 ets_offset;
@@ -2685,7 +2772,7 @@ s32 igb_get_thermal_sensor_data_generic(struct e1000_hw *hw)
  *  Sets the thermal sensor thresholds according to the NVM map
  *  and save off the threshold and location values into mac.thermal_sensor_data
  **/
-s32 igb_init_thermal_sensor_thresh_generic(struct e1000_hw *hw)
+static s32 igb_init_thermal_sensor_thresh_generic(struct e1000_hw *hw)
 {
 	s32 status = E1000_SUCCESS;
 	u16 ets_offset;
@@ -2747,6 +2834,7 @@ s32 igb_init_thermal_sensor_thresh_generic(struct e1000_hw *hw)
 	return status;
 }
 
+#endif
 static struct e1000_mac_operations e1000_mac_ops_82575 = {
 	.init_hw              = igb_init_hw_82575,
 	.check_for_link       = igb_check_for_link_82575,

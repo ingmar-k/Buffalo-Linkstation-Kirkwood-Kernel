@@ -2164,12 +2164,12 @@ void vMgrCreateOwnIBSS(struct vnt_private *pDevice, PCMD_STATUS pStatus)
         pMgmt->wCurrCapInfo |= WLAN_SET_CAP_INFO_ESS(1);
         pMgmt->byDTIMPeriod = DEFAULT_DTIM_PERIOD;
         pMgmt->byDTIMCount = pMgmt->byDTIMPeriod - 1;
-        pDevice->eOPMode = OP_MODE_AP;
+	pDevice->op_mode = NL80211_IFTYPE_AP;
     }
 
     if (pMgmt->eCurrMode == WMAC_MODE_IBSS_STA) {
         pMgmt->wCurrCapInfo |= WLAN_SET_CAP_INFO_IBSS(1);
-        pDevice->eOPMode = OP_MODE_ADHOC;
+	pDevice->op_mode = NL80211_IFTYPE_ADHOC;
     }
 
     if (pDevice->bEncryptionEnable) {
@@ -2359,7 +2359,7 @@ void vMgrJoinBSSBegin(struct vnt_private *pDevice, PCMD_STATUS pStatus)
 
             pMgmt->eCurrState = WMAC_STATE_JOINTED;
             // Adopt BSS state in Adapter Device Object
-            pDevice->eOPMode = OP_MODE_INFRASTRUCTURE;
+	    pDevice->op_mode = NL80211_IFTYPE_STATION;
             memcpy(pDevice->abyBSSID, pCurr->abyBSSID, WLAN_BSSID_LEN);
 
             // Add current BSS to Candidate list
@@ -2500,7 +2500,7 @@ void vMgrJoinBSSBegin(struct vnt_private *pDevice, PCMD_STATUS pStatus)
             pMgmt->eCurrMode = WMAC_MODE_IBSS_STA;
             pMgmt->eCurrState = WMAC_STATE_STARTED;
             // Adopt BSS state in Adapter Device Object
-            pDevice->eOPMode = OP_MODE_ADHOC;
+	    pDevice->op_mode = NL80211_IFTYPE_ADHOC;
             pDevice->bLinkPass = true;
             ControlvMaskByte(pDevice,MESSAGE_REQUEST_MACREG,MAC_REG_PAPEDELAY,LEDSTS_STS,LEDSTS_INTER);
             memcpy(pDevice->abyBSSID, pCurr->abyBSSID, WLAN_BSSID_LEN);
@@ -2961,7 +2961,7 @@ static struct vnt_tx_mgmt *s_MgrMakeBeacon(struct vnt_private *pDevice,
  *
 -*/
 
-struct vnt_tx_mgmt *s_MgrMakeProbeResponse(struct vnt_private *pDevice,
+static struct vnt_tx_mgmt *s_MgrMakeProbeResponse(struct vnt_private *pDevice,
 	struct vnt_manager *pMgmt, u16 wCurrCapInfo, u16 wCurrBeaconPeriod,
 	u32 uCurrChannel, u16 wCurrATIMWinodw, u8 *pDstAddr,
 	PWLAN_IE_SSID pCurrSSID, u8 *pCurrBSSID,
@@ -3081,7 +3081,7 @@ struct vnt_tx_mgmt *s_MgrMakeProbeResponse(struct vnt_private *pDevice,
  *
 -*/
 
-struct vnt_tx_mgmt *s_MgrMakeAssocRequest(struct vnt_private *pDevice,
+static struct vnt_tx_mgmt *s_MgrMakeAssocRequest(struct vnt_private *pDevice,
 	struct vnt_manager *pMgmt, u8 *pDAddr, u16 wCurrCapInfo,
 	u16 wListenInterval,
 	PWLAN_IE_SSID pCurrSSID,
@@ -3329,7 +3329,7 @@ struct vnt_tx_mgmt *s_MgrMakeAssocRequest(struct vnt_private *pDevice,
  *
 -*/
 
-struct vnt_tx_mgmt *s_MgrMakeReAssocRequest(struct vnt_private *pDevice,
+static struct vnt_tx_mgmt *s_MgrMakeReAssocRequest(struct vnt_private *pDevice,
 	struct vnt_manager *pMgmt, u8 *pDAddr, u16 wCurrCapInfo,
 	u16 wListenInterval, PWLAN_IE_SSID pCurrSSID,
 	PWLAN_IE_SUPP_RATES pCurrRates,
@@ -3576,7 +3576,7 @@ struct vnt_tx_mgmt *s_MgrMakeReAssocRequest(struct vnt_private *pDevice,
  *
 -*/
 
-struct vnt_tx_mgmt *s_MgrMakeAssocResponse(struct vnt_private *pDevice,
+static struct vnt_tx_mgmt *s_MgrMakeAssocResponse(struct vnt_private *pDevice,
 	struct vnt_manager *pMgmt, u16 wCurrCapInfo, u16 wAssocStatus,
 	u16 wAssocAID, u8 *pDstAddr, PWLAN_IE_SUPP_RATES pCurrSuppRates,
 	PWLAN_IE_SUPP_RATES pCurrExtSuppRates)
@@ -3642,7 +3642,7 @@ struct vnt_tx_mgmt *s_MgrMakeAssocResponse(struct vnt_private *pDevice,
  *
 -*/
 
-struct vnt_tx_mgmt *s_MgrMakeReAssocResponse(struct vnt_private *pDevice,
+static struct vnt_tx_mgmt *s_MgrMakeReAssocResponse(struct vnt_private *pDevice,
 	struct vnt_manager *pMgmt, u16 wCurrCapInfo, u16 wAssocStatus,
 	u16 wAssocAID, u8 *pDstAddr, PWLAN_IE_SUPP_RATES pCurrSuppRates,
 	PWLAN_IE_SUPP_RATES pCurrExtSuppRates)

@@ -44,6 +44,7 @@
 
 #include <linux/usb.h>
 #include <linux/usb/hcd.h>
+#include <linux/usb/phy.h>
 
 #include "usb.h"
 
@@ -1296,7 +1297,7 @@ EXPORT_SYMBOL_GPL(usb_hcd_unlink_urb_from_ep);
  *   DMA framework is dma_declare_coherent_memory()
  *
  * - So we use that, even though the primary requirement
- *   is that the memory be "local" (hence addressible
+ *   is that the memory be "local" (hence addressable
  *   by that device), not "coherent".
  *
  */
@@ -2048,7 +2049,7 @@ int usb_alloc_streams(struct usb_interface *interface,
 {
 	struct usb_hcd *hcd;
 	struct usb_device *dev;
-	int i;
+	int i, ret;
 
 	dev = interface_to_usbdev(interface);
 	hcd = bus_to_hcd(dev->bus);
@@ -2057,13 +2058,24 @@ int usb_alloc_streams(struct usb_interface *interface,
 	if (dev->speed != USB_SPEED_SUPER)
 		return -EINVAL;
 
-	/* Streams only apply to bulk endpoints. */
-	for (i = 0; i < num_eps; i++)
+	for (i = 0; i < num_eps; i++) {
+		/* Streams only apply to bulk endpoints. */
 		if (!usb_endpoint_xfer_bulk(&eps[i]->desc))
 			return -EINVAL;
+		/* Re-alloc is not allowed */
+		if (eps[i]->streams)
+			return -EINVAL;
+	}
 
-	return hcd->driver->alloc_streams(hcd, dev, eps, num_eps,
+	ret = hcd->driver->alloc_streams(hcd, dev, eps, num_eps,
 			num_streams, mem_flags);
+	if (ret < 0)
+		return ret;
+
+	for (i = 0; i < num_eps; i++)
+		eps[i]->streams = ret;
+
+	return ret;
 }
 EXPORT_SYMBOL_GPL(usb_alloc_streams);
 
@@ -2077,8 +2089,7 @@ EXPORT_SYMBOL_GPL(usb_alloc_streams);
  * Reverts a group of bulk endpoints back to not using stream IDs.
  * Can fail if we are given bad arguments, or HCD is broken.
  *
- * Return: On success, the number of allocated streams. On failure, a negative
- * error code.
+ * Return: 0 on success. On failure, a negative error code.
  */
 int usb_free_streams(struct usb_interface *interface,
 		struct usb_host_endpoint **eps, unsigned int num_eps,
@@ -2086,19 +2097,26 @@ int usb_free_streams(struct usb_interface *interface,
 {
 	struct usb_hcd *hcd;
 	struct usb_device *dev;
-	int i;
+	int i, ret;
 
 	dev = interface_to_usbdev(interface);
 	hcd = bus_to_hcd(dev->bus);
 	if (dev->speed != USB_SPEED_SUPER)
 		return -EINVAL;
 
-	/* Streams only apply to bulk endpoints. */
+	/* Double-free is not allowed */
 	for (i = 0; i < num_eps; i++)
-		if (!eps[i] || !usb_endpoint_xfer_bulk(&eps[i]->desc))
+		if (!eps[i] || !eps[i]->streams)
 			return -EINVAL;
 
-	return hcd->driver->free_streams(hcd, dev, eps, num_eps, mem_flags);
+	ret = hcd->driver->free_streams(hcd, dev, eps, num_eps, mem_flags);
+	if (ret < 0)
+		return ret;
+
+	for (i = 0; i < num_eps; i++)
+		eps[i]->streams = 0;
+
+	return ret;
 }
 EXPORT_SYMBOL_GPL(usb_free_streams);
 
@@ -2587,6 +2605,24 @@ int usb_add_hcd(struct usb_hcd *hcd,
 	int retval;
 	struct usb_device *rhdev;
 
+	if (IS_ENABLED(CONFIG_USB_PHY) && !hcd->phy) {
+		struct usb_phy *phy = usb_get_phy_dev(hcd->self.controller, 0);
+
+		if (IS_ERR(phy)) {
+			retval = PTR_ERR(phy);
+			if (retval == -EPROBE_DEFER)
+				return retval;
+		} else {
+			retval = usb_phy_init(phy);
+			if (retval) {
+				usb_put_phy(phy);
+				return retval;
+			}
+			hcd->phy = phy;
+			hcd->remove_phy = 1;
+		}
+	}
+
 	dev_info(hcd->self.controller, "%s\n", hcd->product_desc);
 
 	/* Keep old behaviour if authorized_default is not in [0, 1]. */
@@ -2602,7 +2638,7 @@ int usb_add_hcd(struct usb_hcd *hcd,
 	 */
 	if ((retval = hcd_buffer_create(hcd)) != 0) {
 		dev_dbg(hcd->self.controller, "pool alloc failed\n");
-		return retval;
+		goto err_remove_phy;
 	}
 
 	if ((retval = usb_register_bus(&hcd->self)) < 0)
@@ -2692,12 +2728,6 @@ int usb_add_hcd(struct usb_hcd *hcd,
 	if (hcd->uses_new_polling && HCD_POLL_RH(hcd))
 		usb_hcd_poll_rh_status(hcd);
 
-	/*
-	 * Host controllers don't generate their own wakeup requests;
-	 * they only forward requests from the root hub.  Therefore
-	 * controllers should always be enabled for remote wakeup.
-	 */
-	device_wakeup_enable(hcd->self.controller);
 	return retval;
 
 error_create_attr_group:
@@ -2733,6 +2763,12 @@ err_allocate_root_hub:
 	usb_deregister_bus(&hcd->self);
 err_register_bus:
 	hcd_buffer_destroy(hcd);
+err_remove_phy:
+	if (hcd->remove_phy && hcd->phy) {
+		usb_phy_shutdown(hcd->phy);
+		usb_put_phy(hcd->phy);
+		hcd->phy = NULL;
+	}
 	return retval;
 }
 EXPORT_SYMBOL_GPL(usb_add_hcd);
@@ -2805,6 +2841,11 @@ void usb_remove_hcd(struct usb_hcd *hcd)
 	usb_put_dev(hcd->self.root_hub);
 	usb_deregister_bus(&hcd->self);
 	hcd_buffer_destroy(hcd);
+	if (hcd->remove_phy && hcd->phy) {
+		usb_phy_shutdown(hcd->phy);
+		usb_put_phy(hcd->phy);
+		hcd->phy = NULL;
+	}
 }
 EXPORT_SYMBOL_GPL(usb_remove_hcd);
 

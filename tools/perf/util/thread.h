@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include "symbol.h"
+#include <strlist.h>
 
 struct thread {
 	union {
@@ -43,12 +44,6 @@ void thread__insert_map(struct thread *thread, struct map *map);
 int thread__fork(struct thread *thread, struct thread *parent, u64 timestamp);
 size_t thread__fprintf(struct thread *thread, FILE *fp);
 
-static inline struct map *thread__find_map(struct thread *thread,
-					   enum map_type type, u64 addr)
-{
-	return thread ? map_groups__find(&thread->mg, type, addr) : NULL;
-}
-
 void thread__find_addr_map(struct thread *thread, struct machine *machine,
 			   u8 cpumode, enum map_type type, u64 addr,
 			   struct addr_location *al);
@@ -56,6 +51,11 @@ void thread__find_addr_map(struct thread *thread, struct machine *machine,
 void thread__find_addr_location(struct thread *thread, struct machine *machine,
 				u8 cpumode, enum map_type type, u64 addr,
 				struct addr_location *al);
+
+void thread__find_cpumode_addr_location(struct thread *thread,
+					struct machine *machine,
+					enum map_type type, u64 addr,
+					struct addr_location *al);
 
 static inline void *thread__priv(struct thread *thread)
 {
@@ -66,4 +66,15 @@ static inline void thread__set_priv(struct thread *thread, void *p)
 {
 	thread->priv = p;
 }
+
+static inline bool thread__is_filtered(struct thread *thread)
+{
+	if (symbol_conf.comm_list &&
+	    !strlist__has_entry(symbol_conf.comm_list, thread__comm_str(thread))) {
+		return true;
+	}
+
+	return false;
+}
+
 #endif	/* __PERF_THREAD_H */

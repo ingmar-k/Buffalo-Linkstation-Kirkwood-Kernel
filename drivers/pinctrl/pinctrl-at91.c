@@ -118,7 +118,7 @@ struct at91_pin_group {
 };
 
 /**
- * struct at91_pinctrl_mux_ops - describes an At91 mux ops group
+ * struct at91_pinctrl_mux_ops - describes an AT91 mux ops group
  * on new IP with support for periph C and D the way to mux in
  * periph A and B has changed
  * So provide the right call back
@@ -722,7 +722,8 @@ static int at91_pinconf_get(struct pinctrl_dev *pctldev,
 	unsigned pin;
 	int div;
 
-	dev_dbg(info->dev, "%s:%d, pin_id=%d, config=0x%lx", __func__, __LINE__, pin_id, *config);
+	*config = 0;
+	dev_dbg(info->dev, "%s:%d, pin_id=%d", __func__, __LINE__, pin_id);
 	pio = pin_to_controller(info, pin_to_bank(pin_id));
 	pin = pin_id % MAX_NB_GPIO_PER_BANK;
 
@@ -783,10 +784,35 @@ static int at91_pinconf_set(struct pinctrl_dev *pctldev,
 	return 0;
 }
 
+#define DBG_SHOW_FLAG(flag) do {		\
+	if (config & flag) {			\
+		if (num_conf)			\
+			seq_puts(s, "|");	\
+		seq_puts(s, #flag);		\
+		num_conf++;			\
+	}					\
+} while (0)
+
 static void at91_pinconf_dbg_show(struct pinctrl_dev *pctldev,
 				   struct seq_file *s, unsigned pin_id)
 {
+	unsigned long config;
+	int ret, val, num_conf = 0;
 
+	ret = at91_pinconf_get(pctldev, pin_id, &config);
+
+	DBG_SHOW_FLAG(MULTI_DRIVE);
+	DBG_SHOW_FLAG(PULL_UP);
+	DBG_SHOW_FLAG(PULL_DOWN);
+	DBG_SHOW_FLAG(DIS_SCHMIT);
+	DBG_SHOW_FLAG(DEGLITCH);
+	DBG_SHOW_FLAG(DEBOUNCE);
+	if (config & DEBOUNCE) {
+		val = config >> DEBOUNCE_VAL_SHIFT;
+		seq_printf(s, "(%d)", val);
+	}
+
+	return;
 }
 
 static void at91_pinconf_group_dbg_show(struct pinctrl_dev *pctldev,
@@ -1111,6 +1137,17 @@ static void at91_gpio_free(struct gpio_chip *chip, unsigned offset)
 	pinctrl_free_gpio(gpio);
 }
 
+static int at91_gpio_get_direction(struct gpio_chip *chip, unsigned offset)
+{
+	struct at91_gpio_chip *at91_gpio = to_at91_gpio_chip(chip);
+	void __iomem *pio = at91_gpio->regbase;
+	unsigned mask = 1 << offset;
+	u32 osr;
+
+	osr = readl_relaxed(pio + PIO_OSR);
+	return !(osr & mask);
+}
+
 static int at91_gpio_direction_input(struct gpio_chip *chip, unsigned offset)
 {
 	struct at91_gpio_chip *at91_gpio = to_at91_gpio_chip(chip);
@@ -1299,6 +1336,31 @@ static int alt_gpio_irq_type(struct irq_data *d, unsigned type)
 	return 0;
 }
 
+static unsigned int gpio_irq_startup(struct irq_data *d)
+{
+	struct at91_gpio_chip *at91_gpio = irq_data_get_irq_chip_data(d);
+	unsigned	pin = d->hwirq;
+	int ret;
+
+	ret = gpio_lock_as_irq(&at91_gpio->chip, pin);
+	if (ret) {
+		dev_err(at91_gpio->chip.dev, "unable to lock pind %lu IRQ\n",
+			d->hwirq);
+		return ret;
+	}
+	gpio_irq_unmask(d);
+	return 0;
+}
+
+static void gpio_irq_shutdown(struct irq_data *d)
+{
+	struct at91_gpio_chip *at91_gpio = irq_data_get_irq_chip_data(d);
+	unsigned	pin = d->hwirq;
+
+	gpio_irq_mask(d);
+	gpio_unlock_as_irq(&at91_gpio->chip, pin);
+}
+
 #ifdef CONFIG_PM
 
 static u32 wakeups[MAX_GPIO_BANKS];
@@ -1339,13 +1401,11 @@ void at91_pinctrl_gpio_suspend(void)
 		__raw_writel(backups[i], pio + PIO_IDR);
 		__raw_writel(wakeups[i], pio + PIO_IER);
 
-		if (!wakeups[i]) {
-			clk_unprepare(gpio_chips[i]->clock);
-			clk_disable(gpio_chips[i]->clock);
-		} else {
+		if (!wakeups[i])
+			clk_disable_unprepare(gpio_chips[i]->clock);
+		else
 			printk(KERN_DEBUG "GPIO-%c may wake for %08x\n",
 			       'A'+i, wakeups[i]);
-		}
 	}
 }
 
@@ -1361,10 +1421,8 @@ void at91_pinctrl_gpio_resume(void)
 
 		pio = gpio_chips[i]->regbase;
 
-		if (!wakeups[i]) {
-			if (clk_prepare(gpio_chips[i]->clock) == 0)
-				clk_enable(gpio_chips[i]->clock);
-		}
+		if (!wakeups[i])
+			clk_prepare_enable(gpio_chips[i]->clock);
 
 		__raw_writel(wakeups[i], pio + PIO_IDR);
 		__raw_writel(backups[i], pio + PIO_IER);
@@ -1377,6 +1435,8 @@ void at91_pinctrl_gpio_resume(void)
 
 static struct irq_chip gpio_irqchip = {
 	.name		= "GPIO",
+	.irq_startup	= gpio_irq_startup,
+	.irq_shutdown	= gpio_irq_shutdown,
 	.irq_disable	= gpio_irq_mask,
 	.irq_mask	= gpio_irq_mask,
 	.irq_unmask	= gpio_irq_unmask,
@@ -1396,7 +1456,7 @@ static void gpio_irq_handler(unsigned irq, struct irq_desc *desc)
 	chained_irq_enter(chip, desc);
 	for (;;) {
 		/* Reading ISR acks pending (edge triggered) GPIO interrupts.
-		 * When there none are pending, we're finished unless we need
+		 * When there are none pending, we're finished unless we need
 		 * to process multiple banks (like ID_PIOCDE on sam9263).
 		 */
 		isr = readl_relaxed(pio + PIO_ISR) & readl_relaxed(pio + PIO_IMR);
@@ -1505,7 +1565,7 @@ static int at91_gpio_of_irq_setup(struct device_node *node,
 		prev = gpio_chips[at91_gpio->pioc_idx - 1];
 
 	/* The top level handler handles one bank of GPIOs, except
-	 * on some SoC it can handles up to three...
+	 * on some SoC it can handle up to three...
 	 * We only set up the handler for the first of the list.
 	 */
 	if (prev && prev->next == at91_gpio)
@@ -1521,13 +1581,14 @@ static int at91_gpio_of_irq_setup(struct device_node *node,
 static struct gpio_chip at91_gpio_template = {
 	.request		= at91_gpio_request,
 	.free			= at91_gpio_free,
+	.get_direction		= at91_gpio_get_direction,
 	.direction_input	= at91_gpio_direction_input,
 	.get			= at91_gpio_get,
 	.direction_output	= at91_gpio_direction_output,
 	.set			= at91_gpio_set,
 	.to_irq			= at91_gpio_to_irq,
 	.dbg_show		= at91_gpio_dbg_show,
-	.can_sleep		= 0,
+	.can_sleep		= false,
 	.ngpio			= MAX_NB_GPIO_PER_BANK,
 };
 

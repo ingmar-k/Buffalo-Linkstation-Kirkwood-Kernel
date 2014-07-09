@@ -18,9 +18,7 @@
 	GNU General Public License for more details.
 
 	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the
-	Free Software Foundation, Inc.,
-	59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+	along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 /*
@@ -31,7 +29,6 @@
 
 #include <linux/delay.h>
 #include <linux/etherdevice.h>
-#include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/usb.h>
@@ -128,9 +125,9 @@ static inline bool rt2800usb_entry_txstatus_timeout(struct queue_entry *entry)
 
 	tout = time_after(jiffies, entry->last_action + msecs_to_jiffies(100));
 	if (unlikely(tout))
-		rt2x00_warn(entry->queue->rt2x00dev,
-			    "TX status timeout for entry %d in queue %d\n",
-			    entry->entry_idx, entry->queue->qid);
+		rt2x00_dbg(entry->queue->rt2x00dev,
+			   "TX status timeout for entry %d in queue %d\n",
+			   entry->entry_idx, entry->queue->qid);
 	return tout;
 
 }
@@ -569,8 +566,8 @@ static void rt2800usb_txdone(struct rt2x00_dev *rt2x00dev)
 		queue = rt2x00queue_get_tx_queue(rt2x00dev, qid);
 
 		if (unlikely(rt2x00queue_empty(queue))) {
-			rt2x00_warn(rt2x00dev, "Got TX status for an empty queue %u, dropping\n",
-				    qid);
+			rt2x00_dbg(rt2x00dev, "Got TX status for an empty queue %u, dropping\n",
+				   qid);
 			break;
 		}
 
@@ -767,7 +764,7 @@ static int rt2800usb_probe_hw(struct rt2x00_dev *rt2x00dev)
 	/*
 	 * Overwrite TX done handler
 	 */
-	PREPARE_WORK(&rt2x00dev->txdone_work, rt2800usb_work_txdone);
+	INIT_WORK(&rt2x00dev->txdone_work, rt2800usb_work_txdone);
 
 	return 0;
 }
@@ -992,6 +989,7 @@ static struct usb_device_id rt2800usb_device_table[] = {
 	{ USB_DEVICE(0x07d1, 0x3c15) },
 	{ USB_DEVICE(0x07d1, 0x3c16) },
 	{ USB_DEVICE(0x07d1, 0x3c17) },
+	{ USB_DEVICE(0x2001, 0x3317) },
 	{ USB_DEVICE(0x2001, 0x3c1b) },
 	/* Draytek */
 	{ USB_DEVICE(0x07fa, 0x7712) },

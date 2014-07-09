@@ -1342,9 +1342,8 @@ static struct regulator *_regulator_get(struct device *dev, const char *id,
 	 * If we have return value from dev_lookup fail, we do not expect to
 	 * succeed, so, quit with appropriate error value
 	 */
-	if (ret && ret != -ENODEV) {
+	if (ret && ret != -ENODEV)
 		goto out;
-	}
 
 	if (!devname)
 		devname = "deviceless";
@@ -1359,7 +1358,8 @@ static struct regulator *_regulator_get(struct device *dev, const char *id,
 
 		rdev = dummy_regulator_rdev;
 		goto found;
-	} else {
+	/* Don't log an error when called from regulator_get_optional() */
+	} else if (!have_full_constraints() || exclusive) {
 		dev_warn(dev, "dummy supplies not allowed\n");
 	}
 
@@ -1908,8 +1908,6 @@ static int _regulator_do_disable(struct regulator_dev *rdev)
 
 	trace_regulator_disable_complete(rdev_get_name(rdev));
 
-	_notifier_call_chain(rdev, REGULATOR_EVENT_DISABLE,
-			     NULL);
 	return 0;
 }
 
@@ -1933,6 +1931,8 @@ static int _regulator_disable(struct regulator_dev *rdev)
 				rdev_err(rdev, "failed to disable\n");
 				return ret;
 			}
+			_notifier_call_chain(rdev, REGULATOR_EVENT_DISABLE,
+					NULL);
 		}
 
 		rdev->use_count = 0;
@@ -1985,20 +1985,16 @@ static int _regulator_force_disable(struct regulator_dev *rdev)
 {
 	int ret = 0;
 
-	/* force disable */
-	if (rdev->desc->ops->disable) {
-		/* ah well, who wants to live forever... */
-		ret = rdev->desc->ops->disable(rdev);
-		if (ret < 0) {
-			rdev_err(rdev, "failed to force disable\n");
-			return ret;
-		}
-		/* notify other consumers that power has been forced off */
-		_notifier_call_chain(rdev, REGULATOR_EVENT_FORCE_DISABLE |
-			REGULATOR_EVENT_DISABLE, NULL);
+	ret = _regulator_do_disable(rdev);
+	if (ret < 0) {
+		rdev_err(rdev, "failed to force disable\n");
+		return ret;
 	}
 
-	return ret;
+	_notifier_call_chain(rdev, REGULATOR_EVENT_FORCE_DISABLE |
+			REGULATOR_EVENT_DISABLE, NULL);
+
+	return 0;
 }
 
 /**
@@ -2142,7 +2138,7 @@ EXPORT_SYMBOL_GPL(regulator_is_enabled);
  * @regulator: regulator source
  *
  * Returns positive if the regulator driver backing the source/client
- * can change its voltage, false otherwise. Usefull for detecting fixed
+ * can change its voltage, false otherwise. Useful for detecting fixed
  * or dummy regulators and disabling voltage change logic in the client
  * driver.
  */
@@ -2252,7 +2248,7 @@ int regulator_is_supported_voltage(struct regulator *regulator,
 	if (!(rdev->constraints->valid_ops_mask & REGULATOR_CHANGE_VOLTAGE)) {
 		ret = regulator_get_voltage(regulator);
 		if (ret >= 0)
-			return (min_uV <= ret && ret <= max_uV);
+			return min_uV <= ret && ret <= max_uV;
 		else
 			return ret;
 	}
@@ -2403,6 +2399,7 @@ int regulator_set_voltage(struct regulator *regulator, int min_uV, int max_uV)
 	struct regulator_dev *rdev = regulator->rdev;
 	int ret = 0;
 	int old_min_uV, old_max_uV;
+	int current_uV;
 
 	mutex_lock(&rdev->mutex);
 
@@ -2412,6 +2409,19 @@ int regulator_set_voltage(struct regulator *regulator, int min_uV, int max_uV)
 	 */
 	if (regulator->min_uV == min_uV && regulator->max_uV == max_uV)
 		goto out;
+
+	/* If we're trying to set a range that overlaps the current voltage,
+	 * return succesfully even though the regulator does not support
+	 * changing the voltage.
+	 */
+	if (!(rdev->constraints->valid_ops_mask & REGULATOR_CHANGE_VOLTAGE)) {
+		current_uV = _regulator_get_voltage(rdev);
+		if (min_uV <= current_uV && current_uV <= max_uV) {
+			regulator->min_uV = min_uV;
+			regulator->max_uV = max_uV;
+			goto out;
+		}
+	}
 
 	/* sanity check */
 	if (!rdev->desc->ops->set_voltage &&
@@ -2424,7 +2434,7 @@ int regulator_set_voltage(struct regulator *regulator, int min_uV, int max_uV)
 	ret = regulator_check_voltage(rdev, &min_uV, &max_uV);
 	if (ret < 0)
 		goto out;
-	
+
 	/* restore original values in case of error */
 	old_min_uV = regulator->min_uV;
 	old_max_uV = regulator->max_uV;
@@ -2438,7 +2448,7 @@ int regulator_set_voltage(struct regulator *regulator, int min_uV, int max_uV)
 	ret = _regulator_do_set_voltage(rdev, min_uV, max_uV);
 	if (ret < 0)
 		goto out2;
-	
+
 out:
 	mutex_unlock(&rdev->mutex);
 	return ret;
@@ -3631,8 +3641,6 @@ int regulator_suspend_finish(void)
 
 	mutex_lock(&regulator_list_mutex);
 	list_for_each_entry(rdev, &regulator_list, list) {
-		struct regulator_ops *ops = rdev->desc->ops;
-
 		mutex_lock(&rdev->mutex);
 		if (rdev->use_count > 0  || rdev->constraints->always_on) {
 			error = _regulator_do_enable(rdev);
@@ -3641,12 +3649,10 @@ int regulator_suspend_finish(void)
 		} else {
 			if (!have_full_constraints())
 				goto unlock;
-			if (!ops->disable)
-				goto unlock;
 			if (!_regulator_is_enabled(rdev))
 				goto unlock;
 
-			error = ops->disable(rdev);
+			error = _regulator_do_disable(rdev);
 			if (error)
 				ret = error;
 		}
@@ -3820,7 +3826,7 @@ static int __init regulator_init_complete(void)
 		ops = rdev->desc->ops;
 		c = rdev->constraints;
 
-		if (!ops->disable || (c && c->always_on))
+		if (c && c->always_on)
 			continue;
 
 		mutex_lock(&rdev->mutex);
@@ -3841,10 +3847,9 @@ static int __init regulator_init_complete(void)
 			/* We log since this may kill the system if it
 			 * goes wrong. */
 			rdev_info(rdev, "disabling\n");
-			ret = ops->disable(rdev);
-			if (ret != 0) {
+			ret = _regulator_do_disable(rdev);
+			if (ret != 0)
 				rdev_err(rdev, "couldn't disable: %d\n", ret);
-			}
 		} else {
 			/* The intention is that in future we will
 			 * assume that full constraints are provided

@@ -24,7 +24,6 @@
 #include <linux/ioport.h>
 #include <linux/slab.h>
 #include <linux/interrupt.h>
-#include <linux/init.h>
 #include <linux/delay.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
@@ -91,6 +90,9 @@ static int fs_enet_rx_napi(struct napi_struct *napi, int budget)
 	int received = 0;
 	u16 pkt_len, sc;
 	int curidx;
+
+	if (budget <= 0)
+		return received;
 
 	/*
 	 * First, grab all of the stats for the incoming packet.

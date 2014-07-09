@@ -441,7 +441,7 @@ static int test_unit_ready(struct scsi_cmnd *srb, struct rts51x_chip *chip)
 	return TRANSPORT_GOOD;
 }
 
-unsigned char formatter_inquiry_str[20] = {
+static unsigned char formatter_inquiry_str[20] = {
 	'M', 'E', 'M', 'O', 'R', 'Y', 'S', 'T', 'I', 'C', 'K',
 	'-', 'M', 'G',		/* Byte[47:49] */
 	0x0B,			/* Byte[50]: MG, MS, MSPro, MSXC */
@@ -1985,13 +1985,12 @@ static int show_info(struct seq_file *m, struct Scsi_Host *host)
 	SPRINTF("       Vendor: Realtek Corp.\n");
 	SPRINTF("      Product: RTS51xx USB Card Reader\n");
 	SPRINTF("      Version: %s\n", DRIVER_VERSION);
-	SPRINTF("        Build: %s\n", __TIME__);
 	return 0;
 }
 
 /* queue a command */
 /* This is always called with scsi_lock(host) held */
-int queuecommand_lck(struct scsi_cmnd *srb, void (*done) (struct scsi_cmnd *))
+static int queuecommand_lck(struct scsi_cmnd *srb, void (*done) (struct scsi_cmnd *))
 {
 	struct rts51x_chip *chip = host_to_rts51x(srb->device->host);
 

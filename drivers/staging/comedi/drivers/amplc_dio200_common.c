@@ -513,7 +513,7 @@ static int dio200_subdev_intr_cmd(struct comedi_device *dev,
 	int event = 0;
 
 	spin_lock_irqsave(&subpriv->spinlock, flags);
-	subpriv->active = 1;
+	subpriv->active = true;
 
 	/* Set up end of acquisition. */
 	switch (cmd->stop_src) {
@@ -1208,7 +1208,7 @@ int amplc_dio200_common_attach(struct comedi_device *dev, unsigned int irq,
 				 "warning! irq %u unavailable!\n", irq);
 		}
 	}
-	dev_info(dev->class_dev, "attached\n");
+
 	return 0;
 }
 EXPORT_SYMBOL_GPL(amplc_dio200_common_attach);

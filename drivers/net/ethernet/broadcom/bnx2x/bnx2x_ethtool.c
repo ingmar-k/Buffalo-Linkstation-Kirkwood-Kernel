@@ -358,49 +358,47 @@ static int bnx2x_set_settings(struct net_device *dev, struct ethtool_cmd *cmd)
 
 	cfg_idx = bnx2x_get_link_cfg_idx(bp);
 	old_multi_phy_config = bp->link_params.multi_phy_config;
-	switch (cmd->port) {
-	case PORT_TP:
-		if (bp->port.supported[cfg_idx] & SUPPORTED_TP)
-			break; /* no port change */
-
-		if (!(bp->port.supported[0] & SUPPORTED_TP ||
-		      bp->port.supported[1] & SUPPORTED_TP)) {
+	if (cmd->port != bnx2x_get_port_type(bp)) {
+		switch (cmd->port) {
+		case PORT_TP:
+			if (!(bp->port.supported[0] & SUPPORTED_TP ||
+			      bp->port.supported[1] & SUPPORTED_TP)) {
+				DP(BNX2X_MSG_ETHTOOL,
+				   "Unsupported port type\n");
+				return -EINVAL;
+			}
+			bp->link_params.multi_phy_config &=
+				~PORT_HW_CFG_PHY_SELECTION_MASK;
+			if (bp->link_params.multi_phy_config &
+			    PORT_HW_CFG_PHY_SWAPPED_ENABLED)
+				bp->link_params.multi_phy_config |=
+				PORT_HW_CFG_PHY_SELECTION_SECOND_PHY;
+			else
+				bp->link_params.multi_phy_config |=
+				PORT_HW_CFG_PHY_SELECTION_FIRST_PHY;
+			break;
+		case PORT_FIBRE:
+		case PORT_DA:
+			if (!(bp->port.supported[0] & SUPPORTED_FIBRE ||
+			      bp->port.supported[1] & SUPPORTED_FIBRE)) {
+				DP(BNX2X_MSG_ETHTOOL,
+				   "Unsupported port type\n");
+				return -EINVAL;
+			}
+			bp->link_params.multi_phy_config &=
+				~PORT_HW_CFG_PHY_SELECTION_MASK;
+			if (bp->link_params.multi_phy_config &
+			    PORT_HW_CFG_PHY_SWAPPED_ENABLED)
+				bp->link_params.multi_phy_config |=
+				PORT_HW_CFG_PHY_SELECTION_FIRST_PHY;
+			else
+				bp->link_params.multi_phy_config |=
+				PORT_HW_CFG_PHY_SELECTION_SECOND_PHY;
+			break;
+		default:
 			DP(BNX2X_MSG_ETHTOOL, "Unsupported port type\n");
 			return -EINVAL;
 		}
-		bp->link_params.multi_phy_config &=
-			~PORT_HW_CFG_PHY_SELECTION_MASK;
-		if (bp->link_params.multi_phy_config &
-		    PORT_HW_CFG_PHY_SWAPPED_ENABLED)
-			bp->link_params.multi_phy_config |=
-			PORT_HW_CFG_PHY_SELECTION_SECOND_PHY;
-		else
-			bp->link_params.multi_phy_config |=
-			PORT_HW_CFG_PHY_SELECTION_FIRST_PHY;
-		break;
-	case PORT_FIBRE:
-	case PORT_DA:
-		if (bp->port.supported[cfg_idx] & SUPPORTED_FIBRE)
-			break; /* no port change */
-
-		if (!(bp->port.supported[0] & SUPPORTED_FIBRE ||
-		      bp->port.supported[1] & SUPPORTED_FIBRE)) {
-			DP(BNX2X_MSG_ETHTOOL, "Unsupported port type\n");
-			return -EINVAL;
-		}
-		bp->link_params.multi_phy_config &=
-			~PORT_HW_CFG_PHY_SELECTION_MASK;
-		if (bp->link_params.multi_phy_config &
-		    PORT_HW_CFG_PHY_SWAPPED_ENABLED)
-			bp->link_params.multi_phy_config |=
-			PORT_HW_CFG_PHY_SELECTION_FIRST_PHY;
-		else
-			bp->link_params.multi_phy_config |=
-			PORT_HW_CFG_PHY_SELECTION_SECOND_PHY;
-		break;
-	default:
-		DP(BNX2X_MSG_ETHTOOL, "Unsupported port type\n");
-		return -EINVAL;
 	}
 	/* Save new config in case command complete successfully */
 	new_multi_phy_config = bp->link_params.multi_phy_config;
@@ -1639,6 +1637,12 @@ static int bnx2x_nvram_write(struct bnx2x *bp, u32 offset, u8 *data_buf,
 
 		memcpy(&val, data_buf, 4);
 
+		/* Notice unlike bnx2x_nvram_read_dword() this will not
+		 * change val using be32_to_cpu(), which causes data to flip
+		 * if the eeprom is read and then written back. This is due
+		 * to tools utilizing this functionality that would break
+		 * if this would be resolved.
+		 */
 		rc = bnx2x_nvram_write_dword(bp, offset, val, cmd_flags);
 
 		/* advance to the next dword */
@@ -2965,8 +2969,9 @@ static void bnx2x_self_test(struct net_device *dev,
 #define IS_PORT_STAT(i) \
 	((bnx2x_stats_arr[i].flags & STATS_FLAGS_BOTH) == STATS_FLAGS_PORT)
 #define IS_FUNC_STAT(i)		(bnx2x_stats_arr[i].flags & STATS_FLAGS_FUNC)
-#define IS_MF_MODE_STAT(bp) \
-			(IS_MF(bp) && !(bp->msg_enable & BNX2X_MSG_STATS))
+#define HIDE_PORT_STAT(bp) \
+		((IS_MF(bp) && !(bp->msg_enable & BNX2X_MSG_STATS)) || \
+		 IS_VF(bp))
 
 /* ethtool statistics are displayed for all regular ethernet queues and the
  * fcoe L2 queue if not disabled
@@ -2988,7 +2993,7 @@ static int bnx2x_get_sset_count(struct net_device *dev, int stringset)
 				      BNX2X_NUM_Q_STATS;
 		} else
 			num_strings = 0;
-		if (IS_MF_MODE_STAT(bp)) {
+		if (HIDE_PORT_STAT(bp)) {
 			for (i = 0; i < BNX2X_NUM_STATS; i++)
 				if (IS_FUNC_STAT(i))
 					num_strings++;
@@ -3043,7 +3048,7 @@ static void bnx2x_get_strings(struct net_device *dev, u32 stringset, u8 *buf)
 		}
 
 		for (i = 0, j = 0; i < BNX2X_NUM_STATS; i++) {
-			if (IS_MF_MODE_STAT(bp) && IS_PORT_STAT(i))
+			if (HIDE_PORT_STAT(bp) && IS_PORT_STAT(i))
 				continue;
 			strcpy(buf + (k + j)*ETH_GSTRING_LEN,
 				   bnx2x_stats_arr[i].string);
@@ -3101,7 +3106,7 @@ static void bnx2x_get_ethtool_stats(struct net_device *dev,
 
 	hw_stats = (u32 *)&bp->eth_stats;
 	for (i = 0, j = 0; i < BNX2X_NUM_STATS; i++) {
-		if (IS_MF_MODE_STAT(bp) && IS_PORT_STAT(i))
+		if (HIDE_PORT_STAT(bp) && IS_PORT_STAT(i))
 			continue;
 		if (bnx2x_stats_arr[i].size == 0) {
 			/* skip this counter */

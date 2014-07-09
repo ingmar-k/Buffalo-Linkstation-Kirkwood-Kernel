@@ -24,9 +24,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307
- * USA
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
 
 Module Name:
 
@@ -74,7 +72,6 @@ Revision History:
 #include <linux/types.h>
 #include <linux/compiler.h>
 #include <linux/delay.h>
-#include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/ioport.h>
 #include <linux/pci.h>
@@ -722,6 +719,9 @@ static int amd8111e_rx_poll(struct napi_struct *napi, int budget)
 #endif
 	int rx_pkt_limit = budget;
 	unsigned long flags;
+
+	if (rx_pkt_limit <= 0)
+		goto rx_not_empty;
 
 	do{
 		/* process receive packets until we use the quota*/

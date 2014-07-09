@@ -67,7 +67,12 @@ struct tcs3472_data {
 	.channel2 = IIO_MOD_LIGHT_##_color, \
 	.address = _addr, \
 	.scan_index = _si, \
-	.scan_type = IIO_ST('u', 16, 16, 0), \
+	.scan_type = { \
+		.sign = 'u', \
+		.realbits = 16, \
+		.storagebits = 16, \
+		.endianness = IIO_CPU, \
+	}, \
 }
 
 static const int tcs3472_agains[] = { 1, 4, 16, 60 };
@@ -174,7 +179,6 @@ static irqreturn_t tcs3472_trigger_handler(int irq, void *p)
 	struct iio_poll_func *pf = p;
 	struct iio_dev *indio_dev = pf->indio_dev;
 	struct tcs3472_data *data = iio_priv(indio_dev);
-	int len = 0;
 	int i, j = 0;
 
 	int ret = tcs3472_req_data(data);
@@ -189,7 +193,6 @@ static irqreturn_t tcs3472_trigger_handler(int irq, void *p)
 			goto done;
 
 		data->buffer[j++] = ret;
-		len += 2;
 	}
 
 	iio_push_to_buffers_with_timestamp(indio_dev, data->buffer,

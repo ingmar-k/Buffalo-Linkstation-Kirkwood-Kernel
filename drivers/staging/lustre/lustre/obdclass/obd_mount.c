@@ -501,7 +501,7 @@ static int lustre_stop_mgc(struct super_block *sb)
 	}
 
 	/* The MGC has no recoverable data in any case.
-	 * force shotdown set in umount_begin */
+	 * force shutdown set in umount_begin */
 	obd->obd_no_recov = 1;
 
 	if (obd->u.cli.cl_mgc_mgsexp) {
@@ -631,6 +631,9 @@ int lustre_put_lsi(struct super_block *sb)
 	CDEBUG(D_MOUNT, "put %p %d\n", sb, atomic_read(&lsi->lsi_mounts));
 	if (atomic_dec_and_test(&lsi->lsi_mounts)) {
 		if (IS_SERVER(lsi) && lsi->lsi_osd_exp) {
+			lu_device_put(&lsi->lsi_dt_dev->dd_lu_dev);
+			lsi->lsi_osd_exp->exp_obd->obd_lvfs_ctxt.dt = NULL;
+			lsi->lsi_dt_dev = NULL;
 			obd_disconnect(lsi->lsi_osd_exp);
 			/* wait till OSD is gone */
 			obd_zombie_barrier();
@@ -751,7 +754,7 @@ int server_name2index(const char *svname, __u32 *idx, const char **endptr)
 }
 EXPORT_SYMBOL(server_name2index);
 
-/*************** mount common betweeen server and client ***************/
+/*************** mount common between server and client ***************/
 
 /* Common umount */
 int lustre_common_put_super(struct super_block *sb)
