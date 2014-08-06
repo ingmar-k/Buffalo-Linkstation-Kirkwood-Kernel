@@ -136,29 +136,31 @@
 		pinctrl-names = "default";
 
 		led@1 {
-			label = "lsxl:blue:func";
+			label = "lswvl:blue:func";
 			gpios = <&gpio1 7 GPIO_ACTIVE_HIGH>;
 		};
 
 		led@2 {
-			label = "lsxl:red:alarm";
+			label = "lswvl:red:alarm";
 			gpios = <&gpio1 4 GPIO_ACTIVE_HIGH>;
 		};
 
 		led@3 {
-			label = "lsxl:amber:info";
+			label = "lswvl:amber:info";
 			gpios = <&gpio1 6 GPIO_ACTIVE_HIGH>;
 		};
 
 		led@4 {
-			label = "lsxl:blue:power";
+			label = "lswvl:blue:power";
 			gpios = <&gpio1 8 GPIO_ACTIVE_LOW>;
 			default-state = "keep";
 		};
 
 		led@5 {
-			label = "lsxl:red:func";
-			gpios = <&gpio1 5 GPIO_ACTIVE_LOW>;
+			label = "lswvl:red:func";
+			gpios = <&gpio1 5 GPIO_ACTIVE_HIGH>;
+			default-state = "keep";
+			linux,default-trigger = "heartbeat";
 		};
 
 		led@6 {
