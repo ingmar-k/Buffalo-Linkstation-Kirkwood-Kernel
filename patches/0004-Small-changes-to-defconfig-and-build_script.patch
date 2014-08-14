@@ -1,0 +1,162 @@
+From 4bf533e0f70a527b24c11db996419d3b8ebb431a Mon Sep 17 00:00:00 2001
+From: ingmar-k <ingmar.klein@hs-augsburg.de>
+Date: Thu, 14 Aug 2014 12:40:59 +0200
+Subject: [PATCH 4/4] Small changes to defconfig and build_script.
+
+---
+ kirkwood-lswvl_config    | 23 ++++++++---------------
+ make_kernel_n_modules.sh | 26 ++++++++++++++++++--------
+ 2 files changed, 26 insertions(+), 23 deletions(-)
+
+diff --git a/kirkwood-lswvl_config b/kirkwood-lswvl_config
+index 3dea8d3..290a4a1 100644
+--- a/kirkwood-lswvl_config
++++ b/kirkwood-lswvl_config
+@@ -29,7 +29,7 @@ CONFIG_BROKEN_ON_SMP=y
+ CONFIG_INIT_ENV_ARG_LIMIT=32
+ CONFIG_CROSS_COMPILE=""
+ # CONFIG_COMPILE_TEST is not set
+-CONFIG_LOCALVERSION="-kirkwood-1.1"
++CONFIG_LOCALVERSION="-kirkwood-1.2"
+ CONFIG_LOCALVERSION_AUTO=y
+ CONFIG_HAVE_KERNEL_GZIP=y
+ CONFIG_HAVE_KERNEL_LZMA=y
+@@ -476,7 +476,7 @@ CONFIG_ARM_APPENDED_DTB=y
+ CONFIG_ARM_ATAG_DTB_COMPAT=y
+ CONFIG_ARM_ATAG_DTB_COMPAT_CMDLINE_FROM_BOOTLOADER=y
+ # CONFIG_ARM_ATAG_DTB_COMPAT_CMDLINE_EXTEND is not set
+-CONFIG_CMDLINE="console=ttyS0,115200n8 root=/dev/sda1 rw noinitrd rootwait rootfstype=ext4 ubi.mtd=rootfs mtdparts=orion_nand:8m(kernel),760m(rootfs),256m(nand_swap) panic=120 zswap.enabled=1"
++CONFIG_CMDLINE="console=ttyS0,115200n8 root=/dev/sda1 rw noinitrd rootwait rootfstype=ext4 ubi.mtd=rootfs mtdparts=orion_nand:4m(boot),764m(rootfs),256m(nand_swap) panic=120 zswap.enabled=1"
+ # CONFIG_CMDLINE_FROM_BOOTLOADER is not set
+ # CONFIG_CMDLINE_EXTEND is not set
+ CONFIG_CMDLINE_FORCE=y
+@@ -512,7 +512,7 @@ CONFIG_CPU_FREQ_GOV_CONSERVATIVE=y
+ #
+ # ARM CPU frequency scaling drivers
+ #
+-# CONFIG_ARM_KIRKWOOD_CPUFREQ is not set
++CONFIG_ARM_KIRKWOOD_CPUFREQ=y
+ 
+ #
+ # CPU Idle
+@@ -2785,21 +2785,14 @@ CONFIG_HFSPLUS_FS=m
+ # CONFIG_EFS_FS is not set
+ CONFIG_JFFS2_FS=y
+ CONFIG_JFFS2_FS_DEBUG=0
+-CONFIG_JFFS2_FS_WRITEBUFFER=y
+-# CONFIG_JFFS2_FS_WBUF_VERIFY is not set
+-CONFIG_JFFS2_SUMMARY=y
+-CONFIG_JFFS2_FS_XATTR=y
+-CONFIG_JFFS2_FS_POSIX_ACL=y
+-CONFIG_JFFS2_FS_SECURITY=y
+-CONFIG_JFFS2_COMPRESSION_OPTIONS=y
++# CONFIG_JFFS2_FS_WRITEBUFFER is not set
++# CONFIG_JFFS2_SUMMARY is not set
++# CONFIG_JFFS2_FS_XATTR is not set
++# CONFIG_JFFS2_COMPRESSION_OPTIONS is not set
+ CONFIG_JFFS2_ZLIB=y
+-CONFIG_JFFS2_LZO=y
++# CONFIG_JFFS2_LZO is not set
+ CONFIG_JFFS2_RTIME=y
+ # CONFIG_JFFS2_RUBIN is not set
+-# CONFIG_JFFS2_CMODE_NONE is not set
+-CONFIG_JFFS2_CMODE_PRIORITY=y
+-# CONFIG_JFFS2_CMODE_SIZE is not set
+-# CONFIG_JFFS2_CMODE_FAVOURLZO is not set
+ CONFIG_UBIFS_FS=y
+ CONFIG_UBIFS_FS_ADVANCED_COMPR=y
+ CONFIG_UBIFS_FS_LZO=y
+diff --git a/make_kernel_n_modules.sh b/make_kernel_n_modules.sh
+index c4ab0f8..f55db00 100755
+--- a/make_kernel_n_modules.sh
++++ b/make_kernel_n_modules.sh
+@@ -10,14 +10,16 @@ dtb_file="kirkwood-lswvl"
+ 
+ if [ ! -z $1  ] && [ "$1" = "clean" ]
+ then
+-	echo -e "Cleaning the kernel source directory now.\n"
++	echo -e "Cleaning the kernel source directory now.\n---------------------\n"
+ 	$make_cmd clean
++	sleep 3
+ fi 
+ 
+ $make_cmd zImage 2>zImage_errors.txt
+ if [ "$?" = "0" ]
+ then
+-	echo -e "'zImage' compiled fine.\n"	
++	echo -e "'zImage' compiled fine.\n---------------------\n"
++	sleep 3	
+ else
+ 	echo "ERRORS occured while compiling 'zImage'. Exiting now!"
+ 	exit 1
+@@ -26,7 +28,8 @@ fi
+ $make_cmd modules 2>modules_errors.txt
+ if [ "$?" = "0" ]
+ then
+-	echo -e "'modules' compiled fine.\n"	
++	echo -e "'modules' compiled fine.\n---------------------\n"
++	sleep 3
+ else
+ 	echo "ERRORS occured while compiling 'modules'. Exiting now!"
+ 	exit 2
+@@ -35,7 +38,8 @@ fi
+ $make_cmd $dtb_file.dtb 2>dtb_errors.txt
+ if [ "$?" = "0" ]
+ then
+-	echo -e "'dtb' compiled fine.\n"	
++	echo -e "'dtb' compiled fine.\n---------------------\n"
++	sleep 3	
+ else
+ 	echo "ERRORS occured while compiling 'dtb'. Exiting now!"
+ 	exit 3
+@@ -43,8 +47,9 @@ fi
+ 
+ if [ -f arch/arm/boot/dts/$dtb_file.dtb ] && [ -f arch/arm/boot/zImage ]
+ then
+-	echo -e "Creating the appended zImage + dtb file.\n"
++	echo -e "Creating the appended zImage + dtb file.\n---------------------\n"
+ 	cat arch/arm/boot/zImage arch/arm/boot/dts/$dtb_file.dtb > arch/arm/boot/zImage.fdt
++	sleep 3
+ else
+ 	echo "ERROR! Either dtb-file or zImage not found."
+ 	exit 4
+@@ -52,8 +57,9 @@ fi
+ 
+ if [ -f arch/arm/boot/zImage.fdt ]
+ then
+-	echo -e "Creating the u-Boot image.\n"
++	echo -e "Creating the u-Boot image.\n---------------------\n"
+ 	mkimage -A arm -O linux -T kernel -C none -a 0x00008000 -e 0x00008000 -n "3.15.5-1-kirkwood-ls-wvl-1.1" -d arch/arm/boot/zImage.fdt arch/arm/boot/uImage
++	sleep 3
+ else
+ 	echo "ERROR! Could not create the U-Boot image."
+ 	exit 4
+@@ -61,13 +67,14 @@ fi
+ 
+ if [ ! -z $1  ] && [ "$1" = "tftp" ]
+ then
+-	echo -e "Copying the kernel to the tftp_dir, now.\n"
++	echo -e "Copying the kernel to the tftp_dir, now.\n---------------------\n"
+ 	sudo cp arch/arm/boot/uImage $tftp_dir/uImage.buffalo
++	sleep 3
+ fi
+ 
+ if [ ! -z $1  ] && [ "$1" = "install" ]
+ then
+-	echo -e "Creating a kernel tar archive.\n"
++	echo -e "Creating a kernel tar archive.\n---------------------\n"
+ 	if [ ! -d $dest_dir/tmp/ ]
+ 	then
+ 		mkdir -p $dest_dir/tmp/
+@@ -85,5 +92,8 @@ then
+ 	rm -rf $dest_dir/tmp/*
+ fi
+ 
++echo -e "---------------------------------\n
++------ SUCCESSFULLY DONE !!! ----\n
++---------------------------------\n"
+ 
+ exit 0
+-- 
+2.1.0.rc1
+

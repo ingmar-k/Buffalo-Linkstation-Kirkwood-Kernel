@@ -30,7 +30,7 @@
 *.xz
 *.lz4
 *.lzo
-*.patch
+#*.patch
 *.gcno
 modules.builtin
 Module.symvers
@@ -63,7 +63,7 @@ arch/*/include/generated
 patches-*
 
 # quilt's files
-patches
+#patches
 series
 
 # cscope files
